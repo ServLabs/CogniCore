@@ -35,7 +35,7 @@ The memory system is modeled after human cognition, with distinct memory types s
 |---|---|
 | `name` | Agent identity / display name |
 | `role` | High-level role description |
-| `domain` | Primary domain (e.g., "finance") |
+| `domain` | Primary domain (e.g., "personal_finance") |
 | `capabilities` | List of things the agent can do |
 | `constraints` | Boundaries / what it cannot or should not do |
 | `version` | Agent version identifier |
@@ -283,7 +283,7 @@ class SessionSentiment:
 
 ### 2.5 Associative Memory (`am.py`)
 
-**Purpose**: The agent's knowledge graph — connects concepts, entities, and relationships to enable multi-hop reasoning and semantic discovery. Analogous to how humans link "billing error" → "system outage" → "migration window" without being explicitly told the chain.
+**Purpose**: The agent's knowledge graph — connects concepts, entities, and relationships to enable multi-hop reasoning and semantic discovery. Analogous to how humans link "high spending" → "subscription fees" → "cancel unused services" without being explicitly told the chain.
 
 **Key Properties**:
 - **Hybrid architecture** — Explicit graph (Kuzu) + implicit semantic index (FAISS).
@@ -319,13 +319,13 @@ class SessionSentiment:
 
 ```
 EXPLICIT (graph):
-  "billing_error" —[caused_by]→ "system_outage"
-  "user_123" —[asked_about]→ "churn_analysis"
-  "comp_plan_disc" —[contains_column]→ "ACTV_AMT"
+  "high_spending" —[caused_by]→ "subscription_fees"
+  "user_123" —[asked_about]→ "monthly_budget"
+  "credit_card_bill" —[due_on]→ "15th_of_month"
 
 IMPLICIT (vector):
-  "revenue leakage" ≈ "billing discrepancy"   (semantically near, no explicit link)
-  "subscriber churn" ≈ "account cancellation"  (different terms, same concept)
+  "savings goal" ≈ "emergency fund"   (semantically near, no explicit link)
+  "recurring charge" ≈ "subscription"  (different terms, same concept)
 ```
 
 **Kuzu Graph Schema** (explicit associations):
@@ -336,7 +336,7 @@ CREATE NODE TABLE Entity (
     id STRING PRIMARY KEY,
     name STRING,
     type STRING,          -- "dataset", "column", "concept", "user", "task", "error"
-    domain STRING,        -- "billing", "collections", "general"
+    domain STRING,        -- "budgeting", "investments", "bills", "savings", "general"
     description STRING,
     created_at TIMESTAMP
 )
@@ -361,14 +361,14 @@ CREATE REL TABLE ASKED_ABOUT (FROM Entity TO Entity, count INT64, last_at TIMEST
 **Query Flow**:
 
 ```
-User query: "What affects revenue leakage?"
+User query: "Why is my spending so high this month?"
     ↓
 ┌──────────────────────────────┐
 │ 1. Embed query with same     │
 │    model used for entities   │
-│ 2. FAISS: top-K similar      │──→ ["billing_discrepancy", "ACTV_AMT", "ADJ credits"]
+│ 2. FAISS: top-K similar      │──→ ["monthly_expenses", "subscriptions", "dining_out"]
 │ 3. Kuzu: multi-hop from      │
-│    matched entities          │──→ "billing_discrepancy" —[caused_by]→ "SOC_mismatch"
+│    matched entities          │──→ "high_spending" —[caused_by]→ "new_subscription"
 │ 4. Merge & rank results      │
 └──────────────────────────────┘
     ↓
@@ -421,14 +421,14 @@ FAISS (now) → Qdrant / Weaviate (managed, distributed vector search)
 
 ```
 procedures/                          ← Human & system authored
-├── billing/
-│   ├── revenue_leakage.py           ← Executable Python procedure
-│   ├── revenue_leakage.yaml         ← Metadata + NL steps
-│   ├── churn_backtest.py
-│   └── churn_backtest.yaml
-├── collections/
-│   ├── aging_report.py
-│   └── aging_report.yaml
+├── budgeting/
+│   ├── monthly_summary.py           ← Executable Python procedure
+│   ├── monthly_summary.yaml         ← Metadata + NL steps
+│   ├── spending_analysis.py
+│   └── spending_analysis.yaml
+├── bills/
+│   ├── bill_tracker.py
+│   └── bill_tracker.yaml
 └── _system_generated/
     ├── auto_001.py                  ← Agent-learned procedures
     └── auto_001.yaml
@@ -440,26 +440,26 @@ procedures/                          ← Human & system authored
 |---|---|---|
 | **Files** (`.py` + `.yaml`) | Actual procedure logic + NL steps | Human-editable, git-versionable, importable, admin-friendly |
 | **SQLite** (same DB as PM/EM) | Metadata index: name, version, domain, tags, usage count, success rate, file path | Fast lookup, versioning, eval stats, queryable |
-| **FAISS** (shared with am.py) | Embedded procedure descriptions | Semantic intent matching: "show me revenue issues" → finds `revenue_leakage` |
+| **FAISS** (shared with am.py) | Embedded procedure descriptions | Semantic intent matching: "show my spending breakdown" → finds `spending_analysis` |
 
 **YAML Metadata Format**:
 
 ```yaml
-name: revenue_leakage_analysis
+name: spending_analysis
 version: 2
-domain: billing
-description: "Identifies revenue leakage by comparing expected vs actual charges"
+domain: budgeting
+description: "Analyzes spending patterns and identifies areas for savings"
 intent_patterns:
-  - "revenue leakage"
-  - "billing discrepancy"
-  - "charge mismatch"
+  - "spending breakdown"
+  - "where is my money going"
+  - "expense analysis"
 source: admin                    # "admin" | "system_generated"
 steps_nl:
-  - "Query comp_plan_disc for the target BILL_MONTH"
-  - "Filter ACTV_CODE = 'ADJ' and ACTV_AMT < 0"
-  - "Aggregate by SOC to find top leakage sources"
-  - "AVOID: Do not include BL_IGNORE_IND = 'Y' records"
-tags: [billing, revenue, telegence]
+  - "Fetch transactions for the specified period"
+  - "Categorize expenses (groceries, dining, subscriptions, etc.)"
+  - "Calculate totals per category and compare to budget"
+  - "AVOID: Do not include pending transactions"
+tags: [budgeting, spending, analysis]
 created_at: 2026-05-11
 updated_at: 2026-05-11
 ```
@@ -473,7 +473,7 @@ updated_at: 2026-05-11
 | `id` | TEXT (UUID) | Primary key |
 | `name` | TEXT | Procedure name (unique) |
 | `version` | INTEGER | Version number (increments on update) |
-| `domain` | TEXT | Domain (e.g., "billing", "collections") |
+| `domain` | TEXT | Domain (e.g., "budgeting", "investments", "bills", "savings") |
 | `source` | TEXT | `admin` / `system_generated` |
 | `description` | TEXT | Human-readable description |
 | `file_path_py` | TEXT | Path to `.py` file (nullable — may be NL-only) |
@@ -545,7 +545,7 @@ System path:   Agent solves new task → extracts steps → writes .py + .yaml
 |---|---|---|
 | `id` | TEXT (UUID) | Primary key |
 | `fact` | TEXT | The compressed fact / summary line |
-| `domain` | TEXT | Domain (e.g., "billing", "collections") |
+| `domain` | TEXT | Domain (e.g., "budgeting", "investments", "bills", "savings") |
 | `source` | TEXT | `promoted_from_lfm` / `admin` / `system_generated` |
 | `source_ref` | TEXT | Reference to LFM chunk or document it came from (nullable) |
 | `tags` | TEXT (JSON array) | Searchable tags |
@@ -556,11 +556,11 @@ System path:   Agent solves new task → extracts steps → writes .py + .yaml
 
 **Example Facts**:
 ```
-"ACTV_AMT: positive = charge to subscriber, negative = credit/refund"
-"comp_plan_disc grain: BAN + SUBSCRIBER_NO + SOC + ACTV_CODE + Bill Cycle"
-"Churn anchor: SUB_STATUS = 'C', date = SUB_STATUS_DATE"
-"eTRACS flow: eTRACS → Mainframe → GRID → ADLS → Snowflake"
-"Always filter BL_IGNORE_IND = 'Y' (test records)"
+"Credit card payment due dates: Chase (15th), Amex (22nd), Discover (1st)"
+"Monthly budget categories: Rent $1500, Groceries $400, Dining $200, Entertainment $150"
+"Emergency fund target: 6 months of expenses = $18,000"
+"Subscription services: Netflix $15, Spotify $10, Gym $50, iCloud $3"
+"401k contribution: 10% of gross salary, employer matches up to 6%"
 ```
 
 **Promotion from LFM**:
@@ -603,7 +603,7 @@ Set source_ref back to LFM chunk for traceability
 | `id` | TEXT (UUID) | Primary key |
 | `title` | TEXT | Document / knowledge article title |
 | `file_path` | TEXT | Path to local `.md` file |
-| `domain` | TEXT | Domain (e.g., "billing", "collections") |
+| `domain` | TEXT | Domain (e.g., "budgeting", "investments", "bills", "savings") |
 | `source` | TEXT | `admin_upload` / `ingested` / `learned` |
 | `tags` | TEXT (JSON array) | Searchable tags |
 | `chunk_count` | INTEGER | Number of chunks extracted |
@@ -675,10 +675,10 @@ Merge & rank → build context for LLM
 | Column | Type | Description |
 |---|---|---|
 | `id` | TEXT (UUID) | Primary key |
-| `topic` | TEXT | Short topic label (2-5 words, e.g., "billing line items") |
+| `topic` | TEXT | Short topic label (2-5 words, e.g., "monthly budget breakdown") |
 | `memory_type` | TEXT | Target memory: `abm` / `pm` / `wm` / `em` / `am` / `mm` / `sfm` / `lfm` |
 | `ref_id` | TEXT | Reference ID or path in the target memory |
-| `domain` | TEXT | Domain (e.g., "billing", "collections") |
+| `domain` | TEXT | Domain (e.g., "budgeting", "investments", "bills", "savings") |
 | `faiss_id` | INTEGER | Corresponding FAISS vector ID |
 | `created_at` | DATETIME | When pointer was registered |
 
@@ -846,10 +846,10 @@ CogniCore/
 │   │       ├── integrity.py
 │   │       └── linking.py
 │   └── procedures/                  ← Motor Memory procedure files
-│       ├── billing/
-│       │   ├── revenue_leakage.py
-│       │   └── revenue_leakage.yaml
-│       ├── collections/
+│       ├── budgeting/
+│       │   ├── spending_analysis.py
+│       │   └── spending_analysis.yaml
+│       ├── bills/
 │       └── _system_generated/
 │
 ├── analytics/
@@ -1029,7 +1029,7 @@ Log consolidation metrics to DuckDB
 ```
 Scan execution_log (DuckDB): find repeated similar tasks
     ↓
-LLM: "I solved 5 similar billing queries this week. What's the common pattern?"
+LLM: "I solved 5 similar budget tracking queries this week. What's the common pattern?"
     ↓
 Generate procedure (.py + .yaml) → save to MM/_system_generated/
     ↓
@@ -1210,10 +1210,10 @@ $$MMR = \arg\max_{d \in R \setminus S} \left[ \lambda \cdot sim(q, d) - (1-\lamb
 
 **Query Decomposition** (out-of-the-box): For complex queries, break into sub-queries, retrieve separately, merge:
 ```
-"What caused revenue leakage in March billing?"
-    → sub-query 1: "revenue leakage" → SFM/LFM
-    → sub-query 2: "March billing" → LFM (time-filtered)
-    → sub-query 3: "cause" → AM (graph traversal from leakage entity)
+"How can I save more money this month?"
+    → sub-query 1: "current spending" → SFM/LFM
+    → sub-query 2: "savings opportunities" → LFM (category-filtered)
+    → sub-query 3: "budget comparison" → AM (graph traversal from expense categories)
     → merge results with RRF
 ```
 
@@ -1286,7 +1286,7 @@ def frequency_boost(access_count: int) -> float:
     return 1 - math.exp(-beta * access_count)
 ```
 
-**Key insight**: Definitions ("ACTV_AMT = monetary amount") should barely decay ($\alpha = 0.8$). Events ("March billing error") should decay fast ($\alpha = 0.2$). The floor per category handles this.
+**Key insight**: Definitions ("Credit card due date = 15th") should barely decay ($\alpha = 0.8$). Events ("March overspending") should decay fast ($\alpha = 0.2$). The floor per category handles this.
 
 ---
 
@@ -1298,7 +1298,7 @@ def frequency_boost(access_count: int) -> float:
 
 | Algorithm | Where | What |
 |---|---|---|
-| **Louvain Community Detection** | AM (Kuzu graph) | Auto-discover clusters of related entities. "These 8 entities all relate to billing adjustments" |
+| **Louvain Community Detection** | AM (Kuzu graph) | Auto-discover clusters of related entities. "These 8 entities all relate to subscription expenses" |
 | **Node2Vec** | AM graph → embeddings | Generate graph-aware embeddings that capture structural relationships, not just text similarity |
 | **Temporal Knowledge Graph Embedding (TTransE)** | AM graph with time | Relationships have time validity. "X caused Y in March" ≠ "X caused Y always" |
 
@@ -1311,7 +1311,7 @@ def frequency_boost(access_count: int) -> float:
    c. If existing → strengthen edges, update properties
 3. Run Louvain on updated subgraph → discover new communities
 4. Community labels → auto-generate SFM summary facts
-   "Billing adjustments cluster: ACTV_CODE=ADJ, DISCOUNT_CD, PROMO_ID are related"
+   "Subscription expenses cluster: Netflix, Spotify, Gym, iCloud are related"
 ```
 
 **Memory Replay** (out-of-the-box — inspired by hippocampal replay in neuroscience): During consolidation, "replay" today's most important interactions through the graph to strengthen paths that were used, exactly like the brain replays experiences during sleep:
@@ -1418,7 +1418,7 @@ class LinUCB:
         self.b[arm] += reward * x
 ```
 
-Over time, the agent learns: "For billing column questions → SFM-only works best. For root-cause analysis → AM graph → LFM cascade is optimal."
+Over time, the agent learns: "For bill due date questions → SFM-only works best. For budget optimization → AM graph → LFM cascade is optimal."
 
 **Simpler alternative**: **Thompson Sampling** — maintains a Beta distribution per arm, samples from it. Simpler math, still balances exploration vs exploitation.
 
@@ -1635,9 +1635,9 @@ The agent has 10 distinct learning types. Each targets specific memory types and
 
 **Levels**:
 ```
-Level 0 (specific):  "BAN 12345 had ADJ for SOC mismatch on 2026-03-15"
-Level 1 (pattern):   "ADJ activity often correlates with SOC mismatches"
-Level 2 (abstract):  "Billing adjustments are primarily driven by plan configuration errors"
+Level 0 (specific):  "User spent $150 on dining on 2026-03-15"
+Level 1 (pattern):   "Dining expenses spike on weekends"
+Level 2 (abstract):  "Discretionary spending increases during leisure time"
 ```
 
 **Algorithm**: Hierarchical clustering + multi-level summarization.
@@ -1689,15 +1689,15 @@ def abstract_from_instances(specific_facts: list[str], target_level: int) -> str
 
 **How**:
 ```
-Known domain: Billing
-  "billing cycles" → monthly periods → aggregate charges per period
+Known domain: Budgeting
+  "expense categories" → individual transactions → aggregate into monthly totals
 
-New domain: Collections
-  "aging buckets" → ???
+New domain: Investments
+  "portfolio holdings" → ???
 
 Analogy detection:
-  embed("billing cycles") ≈ embed("aging buckets") → structural similarity
-  Map: aging buckets = time-windowed groupings, like billing cycles
+  embed("expense categories") ≈ embed("portfolio holdings") → structural similarity
+  Map: portfolio holdings = categorized assets, like expense categories
   → apply similar aggregation patterns
 ```
 
@@ -1794,10 +1794,10 @@ def detect_correction(agent_statement: str, user_response: str) -> bool:
 
 **How**:
 ```
-Known: Billing domain has a "churn_backtest" procedure (MM)
-New:   Collections domain needs a "delinquency_prediction" approach
-Transfer: Churn patterns (billing) inform delinquency patterns (collections)
-    → Adapt churn_backtest procedure → create collections variant
+Known: Budgeting domain has a "spending_analysis" procedure (MM)
+New:   Investments domain needs a "portfolio_analysis" approach
+Transfer: Analysis patterns (budgeting) inform analysis patterns (investments)
+    → Adapt spending_analysis procedure → create investments variant
 ```
 
 **Algorithm**: Procedure adaptation + cross-domain AM edge creation.
@@ -1925,10 +1925,10 @@ Allocate more sleep-mode budget to high-ROI learning types. Reduce budget for le
 **How**:
 ```
 Admin manually runs a sequence:
-  1. Opens billing data
-  2. Filters ACTV_CODE = 'ADJ'
-  3. Groups by SOC
-  4. Computes sum of ACTV_AMT
+  1. Opens transaction history
+  2. Filters by category = 'Dining'
+  3. Groups by merchant
+  4. Sorts by amount descending
   5. Exports result
     ↓
 Agent captures action trace:
@@ -1987,9 +1987,9 @@ class ActionObserver:
 
 **Fact pairs**:
 ```
-✅ "ACTV_AMT is the monetary amount of a billing event"
-❌ "ACTV_AMT is NOT the payment received amount"
-❌ "ACTV_AMT is NOT the account balance"
+✅ "Due date is when payment must be received by the creditor"
+❌ "Due date is NOT the statement closing date"
+❌ "Due date is NOT the transaction date"
 
 ✅ "SUB_STATUS = 'C' means cancelled"
 ❌ "SUB_STATUS = 'C' does NOT mean 'completed' or 'closed'"
@@ -2296,7 +2296,7 @@ class ExecutionPlan:
 ```python
 @dataclass
 class Skill:
-    name: str                    # "query_billing_data"
+    name: str                    # "analyze_spending"
     description: str             # For LLM to understand when to use it
     parameters: dict             # JSON schema of expected inputs
     executor: Callable           # The actual Python function
@@ -2310,8 +2310,8 @@ class Skill:
 
 | Type | What | Runtime | Example |
 |---|---|---|---|
-| `python` | Execute a Python function | Script Runner (sandboxed) | Churn analysis, data transformation |
-| `sql` | Query a database | DB Connector (auth + pool) | Retrieve billing records from Snowflake |
+| `python` | Execute a Python function | Script Runner (sandboxed) | Budget analysis, spending categorization |
+| `sql` | Query a database | DB Connector (auth + pool) | Retrieve transaction records from database |
 | `api` | Call an external service | API Client (retry + auth) | Azure Blob operations, internal APIs |
 | `composite` | Orchestrate multiple skills | Sub-Agent Spawner | "Pull data → transform → analyze → report" |
 
@@ -2440,12 +2440,12 @@ class SubAgentSpawner:
 
 **Example**:
 ```
-User: "Compare March vs April revenue leakage across all markets"
+User: "Compare my spending this month vs last month"
     ↓
 Deep LLM → Decision: spawn 2 sub-agents
     ↓
-Sub-agent A: "Get March revenue leakage" → skill: query_billing(month="2026-03")
-Sub-agent B: "Get April revenue leakage" → skill: query_billing(month="2026-04")
+Sub-agent A: "Get this month's spending" → skill: analyze_spending(month="current")
+Sub-agent B: "Get last month's spending" → skill: analyze_spending(month="previous")
     ↓ (asyncio.gather — parallel)
     ↓ both complete
 Deep LLM: Synthesize comparison → format response → return
@@ -2586,8 +2586,8 @@ Three brain-inspired control networks that coordinate the entire agent. Without 
 
 | Source | Event | Example |
 |---|---|---|
-| User | New message | "What's March revenue leakage?" |
-| PM Scheduler | Task due | Cron job fires: daily billing report |
+| User | New message | "How much did I spend on groceries this month?" |
+| PM Scheduler | Task due | Cron job fires: weekly spending summary |
 | MML | Conflict detected | SFM fact contradicts LFM chunk |
 | MML | Memory health alert | FAISS index corruption detected |
 | Sub-agents | Task complete | Parallel query finished |
@@ -3025,7 +3025,7 @@ class DefaultModeNetwork:
         if not self.active: return
 
         # Pattern 1: User behavior prediction
-        # "User_123 usually asks about churn on Mondays"
+        # "User_123 usually checks their budget on Sunday evenings"
         user_patterns = self.analytics.query("""
             SELECT
                 dimensions->>'user_id' as user_id,
@@ -3046,7 +3046,7 @@ class DefaultModeNetwork:
             await self._schedule_pre_cache(pattern)
 
         # Pattern 2: Data freshness
-        # "Billing data refreshes monthly — schedule re-ingestion"
+        # "Bank transactions sync daily — schedule refresh"
         stale_docs = self.analytics.query("""
             SELECT id, title, file_path, ingested_at
             FROM long_form_documents
@@ -3057,7 +3057,7 @@ class DefaultModeNetwork:
             self.analytics.log_metric("dmn", "stale_docs_found", len(stale_docs))
 
         # Pattern 3: Performance optimization
-        # "Collections queries are slow — optimize those indexes"
+        # "Investment queries are slow — optimize those indexes"
         slow_domains = self.analytics.query("""
             SELECT dimensions->>'domain' as domain,
                    AVG(metric_value) as avg_latency
@@ -5597,15 +5597,15 @@ class StreamEvent:
 
 | Type | When | UI Rendering | Example `text` |
 |---|---|---|---|
-| `thinking` | Agent is reasoning | Collapsible "Behind the scenes" | "Analyzing query... domain: billing, intent: revenue_leakage" |
-| `memory_recall` | Searching/retrieving memory | Light text + source badge | "Searching billing knowledge base... found 3 documents" |
-| `tool_call` | Calling a tool/skill | Tool name + params | "Querying Snowflake: billing_transactions WHERE month = 'March'" |
-| `tool_result` | Tool returned results | Result summary | "Retrieved 1,247 records (42ms)" |
-| `decision` | Decision engine chose a path | Light text | "Need Snowflake query + sandbox analysis" |
-| `sub_agent` | Sub-agent spawned/completed | Agent badge | "Spawned: collections_analyzer — analyzing write-offs" |
+| `thinking` | Agent is reasoning | Collapsible "Behind the scenes" | "Analyzing query... domain: budgeting, intent: analysis" |
+| `memory_recall` | Searching/retrieving memory | Light text + source badge | "Searching finance knowledge base... found 3 documents" |
+| `tool_call` | Calling a tool/skill | Tool name + params | "Analyzing spending: March 2026, category: all" |
+| `tool_result` | Tool returned results | Result summary | "Processed 147 transactions (42ms)" |
+| `decision` | Decision engine chose a path | Light text | "Need spending analysis + budget comparison" |
+| `sub_agent` | Sub-agent spawned/completed | Agent badge | "Spawned: budget_analyzer — comparing categories" |
 | `governor` | Guardrail triggered | Warning badge | "Rate limit: switching to cheaper model" |
-| `error` | Something failed | Red inline error | "Snowflake query timed out — retrying with cache" |
-| `response` | Final response streaming | Main chat bubble (token by token) | "Based on March billing data..." |
+| `error` | Something failed | Red inline error | "Bank API timed out — retrying with cache" |
+| `response` | Final response streaming | Main chat bubble (token by token) | "Based on your spending data..." |
 | `done` | Request complete | Hidden (triggers UI cleanup) | — |
 
 #### 9.2.2 Event Stream
@@ -5834,26 +5834,26 @@ The web interface receives stream events and renders them in two tiers:
 ┌──────────────────────────────────────────────────────────────┐
 │  Chat Interface                                               │
 │                                                               │
-│  User: What's the March revenue leakage in billing?           │
+│  User: Where did my money go this month?                      │
 │                                                               │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │  ▼ Behind the scenes (click to expand)                  │  │
 │  │                                                         │  │
-│  │  💭 Analyzing query... domain: billing,                 │  │
-│  │     intent: revenue_leakage, time: March                │  │
-│  │  🔍 Searching billing knowledge base... 3 docs found    │  │
-│  │  🔧 Querying Snowflake: billing_transactions (42ms)     │  │
-│  │  📊 Retrieved 1,247 records                             │  │
-│  │  🔧 Running revenue_leakage_calc.py (180ms)             │  │
+│  │  💭 Analyzing query... domain: budgeting,               │  │
+│  │     intent: spending_breakdown, period: this_month      │  │
+│  │  🔍 Searching finance knowledge base... 3 docs found    │  │
+│  │  🔧 Analyzing transactions: March 2026 (42ms)           │  │
+│  │  📊 Processed 147 transactions                          │  │
+│  │  🔧 Running spending_analysis.py (180ms)                │  │
 │  │  💭 Composing final response...                         │  │
 │  └─────────────────────────────────────────────────────────┘  │
 │                                                               │
-│  Agent: Based on March billing data, I identified $42,300     │
-│  in revenue leakage across three categories:                  │
+│  Agent: Here's your spending breakdown for March 2026:        │
 │                                                               │
-│  1. Unbilled services: $18,200 (43%)                          │
-│  2. Rate discrepancies: $14,800 (35%)                         │
-│  3. Credit over-applications: $9,300 (22%)                    │
+│                                                               │
+│  1. Rent & Utilities: $1,650 (42%)                            │
+│  2. Groceries: $420 (11%)                                     │
+│  3. Dining Out: $285 (7%)                                     │
 │  ...                                                          │
 │                                                               │
 │  ⏱ 4.5s · 2 tools · 3 memories · $0.03                      │
@@ -6046,10 +6046,10 @@ Errors are streamed to the client in real-time so users see what went wrong:
 stream.emit_error("Snowflake query timed out — retrying with cached data", recoverable=True)
 
 # When fallback succeeds:
-stream.emit_thinking("Using cached billing data from yesterday (Snowflake unavailable)")
+stream.emit_thinking("Using cached transaction data from earlier (bank API unavailable)")
 
 # When nothing works:
-stream.emit_error("Unable to retrieve billing data. Please try again later.", recoverable=False)
+stream.emit_error("Unable to retrieve transaction data. Please try again later.", recoverable=False)
 stream.emit_done({"status": "partial_failure", "error": "data_unavailable"})
 ```
 
@@ -6263,11 +6263,11 @@ class IngestionAPI:
 **Ingestion flow**:
 
 ```
-POST /ingest/text  {"text": "...", "title": "March Billing Report", "domain": "billing"}
+POST /ingest/text  {"text": "...", "title": "Tax Deduction Guide", "domain": "taxes"}
     ↓
 ┌────────────────────────────────────────────────────────────┐
 │  1. Store full document → cold.db (long_form_documents)    │
-│  2. Save markdown → /datadrive/md/march_billing_report.md  │
+│  2. Save markdown → /datadrive/md/tax_deduction_guide.md   │
 │  3. Chunk text (512 words, 50 overlap)                     │
 │  4. Embed chunks → FAISS lfm.index                         │
 │  5. Store chunks → cold.db (lfm_chunks)                    │
@@ -6634,7 +6634,7 @@ class PromptManager:
     def get(self, path: str, **variables) -> str:
         """Load a prompt by path (relative to prompts/). Supports variable substitution.
 
-        Usage: prompt_mgr.get("system/thinking.md", domain="billing", query=user_query)
+        Usage: prompt_mgr.get("system/thinking.md", domain="budgeting", query=user_query)
         """
         if path not in self._cache:
             full_path = self.prompts_dir / path
@@ -6665,10 +6665,10 @@ prompts = PromptManager()
 **Example prompt file** (`prompts/system/thinking.md`):
 
 ```markdown
-You are a query decomposition engine for a finance domain AI agent.
+You are a query decomposition engine for a personal finance AI agent.
 
 Given a user query, break it down into:
-1. **Domain**: Which area? (billing, collections, revenue, general)
+1. **Domain**: Which area? (budgeting, investments, bills, savings, taxes, general)
 2. **Intent**: What does the user want? (lookup, analysis, comparison, forecast, explanation)
 3. **Entities**: Key entities mentioned (account IDs, dates, dollar amounts, product names)
 4. **Sub-questions**: Break complex queries into atomic sub-questions
@@ -6722,7 +6722,7 @@ class MML:
 |---|---|
 | `config.py` at root, not in connectors | Config is used by every layer. Root-level = shortest import path, clearest ownership. |
 | `logger.py` as Python `logging` wrapper | Standard library, zero dependencies. Rotating files for production. Child loggers for module filtering. |
-| Redaction as regex patterns | Fast (<1ms), no ML model needed. Finance PII patterns are well-defined (SSN, CC, phone). Configurable per-pattern enable/disable. |
+| Redaction as regex patterns | Fast (<1ms), no ML model needed. PII patterns are well-defined (SSN, CC, phone, passport). Configurable per-pattern enable/disable. |
 | Redaction applied at write time | Scrub before data hits disk or network. Once redacted, PII is gone — no accidental leaks in logs/audit/streams. |
 | Prompts as `.md` files | Git-friendly, editable by non-developers, hot-reloadable. Variable substitution with `{{var}}` keeps prompts dynamic. |
 | Prompt cache with manual reload | Prompts rarely change at runtime. Cache for performance. `reload()` for dev iteration. |
@@ -6844,7 +6844,7 @@ async def test_sfm_write(mock_db, mock_embedder):
         "subject": "Customer 123",
         "predicate": "has_status",
         "object": "active",
-        "domain": "billing",
+        "domain": "budgeting",
         "confidence": 0.9,
     }
     
@@ -6903,7 +6903,7 @@ from agent.api import handle_message
 def mock_llm_responses():
     """Predefined LLM responses for deterministic testing."""
     return {
-        "thinking": '{"domain": "billing", "intent": "lookup"}',
+        "thinking": '{"domain": "budgeting", "intent": "analysis"}',
         "synthesis": "Based on the data, the customer status is active.",
     }
 
@@ -6960,9 +6960,9 @@ async def test_registry(test_config):
 def sample_facts():
     """Sample SFM facts for testing."""
     return [
-        {"subject": "Customer 123", "predicate": "has_balance", "object": "$500", "domain": "billing"},
-        {"subject": "Customer 123", "predicate": "has_status", "object": "active", "domain": "billing"},
-        {"subject": "Product A", "predicate": "has_price", "object": "$99", "domain": "catalog"},
+        {"subject": "Chase Sapphire", "predicate": "due_date", "object": "15th", "domain": "bills"},
+        {"subject": "Netflix", "predicate": "monthly_cost", "object": "$15.99", "domain": "subscriptions"},
+        {"subject": "Emergency Fund", "predicate": "target", "object": "$18,000", "domain": "savings"},
     ]
 
 
@@ -6970,9 +6970,9 @@ def sample_facts():
 def sample_document():
     """Sample LFM document for testing."""
     return {
-        "title": "Billing Policy",
-        "content": "All invoices are due within 30 days. Late payments incur a 5% fee.",
-        "domain": "billing",
+        "title": "Tax Deduction Guide",
+        "content": "Common deductions include mortgage interest, charitable donations, and medical expenses over 7.5% of AGI.",
+        "domain": "taxes",
     }
 ```
 
@@ -8448,7 +8448,7 @@ CogniCore/
 │   │   ├── budget.py                ← LLM budget manager
 │   │   ├── learning/                ← 10 learning types
 │   │   └── maintenance/             ← 7 maintenance daemons
-│   └── procedures/                  ← Stored procedures (billing/, collections/)
+│   └── procedures/                  ← Stored procedures (budgeting/, bills/, investments/)
 │
 ├── analytics/                       ← Analytics Layer (Section 3)
 │   └── analytics.py                 ← DuckDB metrics + eval_scores
