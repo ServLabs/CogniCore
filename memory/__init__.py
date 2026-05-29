@@ -55,6 +55,14 @@ from memory.types import (
     add_entity,
     link_entities,
     search_knowledge,
+    # MM
+    Procedure,
+    ProcedureResult,
+    MotorMemory,
+    get_motor_memory,
+    find_procedure,
+    execute_procedure,
+    learn_procedure,
 )
 
 __all__ = [
@@ -100,4 +108,12 @@ __all__ = [
     "add_entity",
     "link_entities",
     "search_knowledge",
+    # MM - Procedures
+    "Procedure",
+    "ProcedureResult",
+    "MotorMemory",
+    "get_motor_memory",
+    "find_procedure",
+    "execute_procedure",
+    "learn_procedure",
 ]

@@ -60,6 +60,15 @@ from memory.types.am import (
     link_entities,
     search_knowledge,
 )
+from memory.types.mm import (
+    Procedure,
+    ProcedureResult,
+    MotorMemory,
+    get_motor_memory,
+    find_procedure,
+    execute_procedure,
+    learn_procedure,
+)
 
 __all__ = [
     # ABM - Agent Identity
@@ -104,4 +113,12 @@ __all__ = [
     "add_entity",
     "link_entities",
     "search_knowledge",
+    # MM - Procedures
+    "Procedure",
+    "ProcedureResult",
+    "MotorMemory",
+    "get_motor_memory",
+    "find_procedure",
+    "execute_procedure",
+    "learn_procedure",
 ]
