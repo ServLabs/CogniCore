@@ -71,6 +71,15 @@ from memory.types import (
     add_fact,
     search_facts,
     get_fact,
+    # LFM
+    Document,
+    Chunk,
+    ChunkSearchResult,
+    LongFormMemory,
+    get_long_form_memory,
+    ingest_document,
+    search_documents,
+    get_document,
 )
 
 __all__ = [
@@ -132,4 +141,13 @@ __all__ = [
     "add_fact",
     "search_facts",
     "get_fact",
+    # LFM - Documents
+    "Document",
+    "Chunk",
+    "ChunkSearchResult",
+    "LongFormMemory",
+    "get_long_form_memory",
+    "ingest_document",
+    "search_documents",
+    "get_document",
 ]

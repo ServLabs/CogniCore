@@ -78,6 +78,16 @@ from memory.types.sfm import (
     search_facts,
     get_fact,
 )
+from memory.types.lfm import (
+    Document,
+    Chunk,
+    ChunkSearchResult,
+    LongFormMemory,
+    get_long_form_memory,
+    ingest_document,
+    search_documents,
+    get_document,
+)
 
 __all__ = [
     # ABM - Agent Identity
@@ -138,4 +148,13 @@ __all__ = [
     "add_fact",
     "search_facts",
     "get_fact",
+    # LFM - Documents
+    "Document",
+    "Chunk",
+    "ChunkSearchResult",
+    "LongFormMemory",
+    "get_long_form_memory",
+    "ingest_document",
+    "search_documents",
+    "get_document",
 ]
