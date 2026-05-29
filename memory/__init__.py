@@ -63,6 +63,14 @@ from memory.types import (
     find_procedure,
     execute_procedure,
     learn_procedure,
+    # SFM
+    Fact,
+    FactSearchResult,
+    ShortFormMemory,
+    get_short_form_memory,
+    add_fact,
+    search_facts,
+    get_fact,
 )
 
 __all__ = [
@@ -116,4 +124,12 @@ __all__ = [
     "find_procedure",
     "execute_procedure",
     "learn_procedure",
+    # SFM - Facts
+    "Fact",
+    "FactSearchResult",
+    "ShortFormMemory",
+    "get_short_form_memory",
+    "add_fact",
+    "search_facts",
+    "get_fact",
 ]
