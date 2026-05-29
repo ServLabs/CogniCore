@@ -13,10 +13,20 @@ Usage:
 """
 
 from memory.types import (
+    # ABM
     AutobiographicalMemory,
     get_identity,
     get_full_system_prompt,
     get_compact_system_prompt,
+    # PM
+    Schedule,
+    ScheduleStatus,
+    ExecutionLog,
+    ExecutionStatus,
+    ProspectiveMemory,
+    get_prospective_memory,
+    schedule_task,
+    cancel_task,
 )
 
 __all__ = [
@@ -25,4 +35,13 @@ __all__ = [
     "get_identity",
     "get_full_system_prompt",
     "get_compact_system_prompt",
+    # PM - Scheduled Tasks
+    "Schedule",
+    "ScheduleStatus",
+    "ExecutionLog",
+    "ExecutionStatus",
+    "ProspectiveMemory",
+    "get_prospective_memory",
+    "schedule_task",
+    "cancel_task",
 ]

@@ -19,11 +19,30 @@ from memory.types.abm import (
     get_full_system_prompt,
     get_compact_system_prompt,
 )
+from memory.types.pm import (
+    Schedule,
+    ScheduleStatus,
+    ExecutionLog,
+    ExecutionStatus,
+    ProspectiveMemory,
+    get_prospective_memory,
+    schedule_task,
+    cancel_task,
+)
 
 __all__ = [
     # ABM - Agent Identity
-    "AutobiographicalMemory",  # Class (for type hints and testing)
-    "get_identity",            # Singleton accessor
-    "get_full_system_prompt",  # Full identity prompt
-    "get_compact_system_prompt",  # Compact identity prompt
+    "AutobiographicalMemory",
+    "get_identity",
+    "get_full_system_prompt",
+    "get_compact_system_prompt",
+    # PM - Scheduled Tasks
+    "Schedule",
+    "ScheduleStatus",
+    "ExecutionLog",
+    "ExecutionStatus",
+    "ProspectiveMemory",
+    "get_prospective_memory",
+    "schedule_task",
+    "cancel_task",
 ]
