@@ -29,6 +29,17 @@ from memory.types.pm import (
     schedule_task,
     cancel_task,
 )
+from memory.types.wm import (
+    Message,
+    MessageRole,
+    ConversationSummary,
+    Conversation,
+    WorkingMemory,
+    get_working_memory,
+    add_user_message,
+    add_assistant_message,
+    get_context,
+)
 
 __all__ = [
     # ABM - Agent Identity
@@ -45,4 +56,14 @@ __all__ = [
     "get_prospective_memory",
     "schedule_task",
     "cancel_task",
+    # WM - Conversation Context
+    "Message",
+    "MessageRole",
+    "ConversationSummary",
+    "Conversation",
+    "WorkingMemory",
+    "get_working_memory",
+    "add_user_message",
+    "add_assistant_message",
+    "get_context",
 ]
