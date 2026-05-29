@@ -40,6 +40,20 @@ from memory.types.wm import (
     add_assistant_message,
     get_context,
 )
+from memory.types.em import (
+    Sentiment,
+    ResponseLength,
+    Formality,
+    DetailLevel,
+    SentimentEvent,
+    SessionSentiment,
+    UserPreferences,
+    EmotionalMemory,
+    get_emotional_memory,
+    record_sentiment,
+    get_preferences,
+    get_calibration_hints,
+)
 
 __all__ = [
     # ABM - Agent Identity
@@ -66,4 +80,17 @@ __all__ = [
     "add_user_message",
     "add_assistant_message",
     "get_context",
+    # EM - Sentiment & Preferences
+    "Sentiment",
+    "ResponseLength",
+    "Formality",
+    "DetailLevel",
+    "SentimentEvent",
+    "SessionSentiment",
+    "UserPreferences",
+    "EmotionalMemory",
+    "get_emotional_memory",
+    "record_sentiment",
+    "get_preferences",
+    "get_calibration_hints",
 ]
