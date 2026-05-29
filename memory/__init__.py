@@ -80,6 +80,17 @@ from memory.types import (
     ingest_document,
     search_documents,
     get_document,
+    # Meta
+    MemoryType,
+    MemoryPointer,
+    KnowledgeGap,
+    RouteResult,
+    MetaMemory,
+    get_meta_memory,
+    register_knowledge,
+    route_query,
+    what_do_i_know,
+    what_dont_i_know,
 )
 
 __all__ = [
@@ -150,4 +161,15 @@ __all__ = [
     "ingest_document",
     "search_documents",
     "get_document",
+    # Meta - Routing
+    "MemoryType",
+    "MemoryPointer",
+    "KnowledgeGap",
+    "RouteResult",
+    "MetaMemory",
+    "get_meta_memory",
+    "register_knowledge",
+    "route_query",
+    "what_do_i_know",
+    "what_dont_i_know",
 ]

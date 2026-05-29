@@ -88,6 +88,18 @@ from memory.types.lfm import (
     search_documents,
     get_document,
 )
+from memory.types.meta import (
+    MemoryType,
+    MemoryPointer,
+    KnowledgeGap,
+    RouteResult,
+    MetaMemory,
+    get_meta_memory,
+    register_knowledge,
+    route_query,
+    what_do_i_know,
+    what_dont_i_know,
+)
 
 __all__ = [
     # ABM - Agent Identity
@@ -157,4 +169,15 @@ __all__ = [
     "ingest_document",
     "search_documents",
     "get_document",
+    # Meta - Routing
+    "MemoryType",
+    "MemoryPointer",
+    "KnowledgeGap",
+    "RouteResult",
+    "MetaMemory",
+    "get_meta_memory",
+    "register_knowledge",
+    "route_query",
+    "what_do_i_know",
+    "what_dont_i_know",
 ]
