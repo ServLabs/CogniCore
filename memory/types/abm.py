@@ -164,21 +164,27 @@ def get_identity() -> AutobiographicalMemory:
     return _abm_instance
 
 
-def get_system_prompt() -> str:
+def get_full_system_prompt() -> str:
     """
-    Convenience function to get the identity system prompt.
+    Get the full identity system prompt.
+    
+    Use this for the main system prompt where token budget allows.
+    Includes all capabilities, constraints, and personality traits.
     
     Returns:
-        The identity portion of the system prompt.
+        Complete identity prompt string.
     """
     return get_identity().to_system_prompt()
 
 
-def get_compact_prompt() -> str:
+def get_compact_system_prompt() -> str:
     """
-    Convenience function to get the compact identity prompt.
+    Get a shortened identity prompt.
+    
+    Use this when token budget is tight (e.g., sub-agent calls,
+    tool descriptions, or when context window is nearly full).
     
     Returns:
-        Shortened identity prompt for token-constrained contexts.
+        Shortened identity prompt string.
     """
     return get_identity().to_compact_prompt()
