@@ -38,10 +38,6 @@ from memory.types import (
     add_assistant_message,
     get_context,
     # EM
-    Sentiment,
-    ResponseLength,
-    Formality,
-    DetailLevel,
     SentimentEvent,
     SessionSentiment,
     UserPreferences,
@@ -50,6 +46,15 @@ from memory.types import (
     record_sentiment,
     get_preferences,
     get_calibration_hints,
+    # AM
+    Entity,
+    Relationship,
+    SearchResult,
+    AssociativeMemory,
+    get_associative_memory,
+    add_entity,
+    link_entities,
+    search_knowledge,
 )
 
 __all__ = [
@@ -78,10 +83,6 @@ __all__ = [
     "add_assistant_message",
     "get_context",
     # EM - Sentiment & Preferences
-    "Sentiment",
-    "ResponseLength",
-    "Formality",
-    "DetailLevel",
     "SentimentEvent",
     "SessionSentiment",
     "UserPreferences",
@@ -90,4 +91,13 @@ __all__ = [
     "record_sentiment",
     "get_preferences",
     "get_calibration_hints",
+    # AM - Knowledge Graph
+    "Entity",
+    "Relationship",
+    "SearchResult",
+    "AssociativeMemory",
+    "get_associative_memory",
+    "add_entity",
+    "link_entities",
+    "search_knowledge",
 ]

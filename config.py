@@ -12,6 +12,120 @@ from typing import Optional
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Domain Configuration (Platform-agnostic)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class DomainConfig:
+    """
+    Configurable domain-specific values.
+    
+    Change these to adapt CogniCore to any domain without code changes.
+    """
+    # Knowledge domains (e.g., for personal finance: budgeting, investments, bills)
+    domains: tuple[str, ...] = (
+        "budgeting",
+        "investments", 
+        "bills",
+        "savings",
+        "taxes",
+        "general",
+    )
+    
+    # Entity types in knowledge graph
+    entity_types: tuple[str, ...] = (
+        "concept",
+        "dataset",
+        "column",
+        "user",
+        "task",
+        "error",
+        "account",
+        "category",
+        "merchant",
+    )
+    
+    # Relationship types between entities
+    relation_types: tuple[str, ...] = (
+        "RELATED_TO",
+        "CAUSED_BY",
+        "CONTAINS",
+        "ASKED_ABOUT",
+        "BELONGS_TO",
+        "SIMILAR_TO",
+    )
+    
+    # Task types for scheduled tasks
+    task_types: tuple[str, ...] = (
+        "data_pull",
+        "report",
+        "alert",
+        "sync",
+        "cleanup",
+    )
+    
+    # Sentiment triggers (what causes sentiment changes)
+    sentiment_triggers: tuple[str, ...] = (
+        "task_failure",
+        "slow_response",
+        "good_result",
+        "confusion",
+        "repeated_question",
+    )
+    
+    # Sentiment values
+    sentiments: tuple[str, ...] = (
+        "frustrated",
+        "neutral",
+        "satisfied",
+    )
+    
+    # User preference options
+    response_lengths: tuple[str, ...] = (
+        "short",
+        "medium",
+        "detailed",
+    )
+    
+    formality_levels: tuple[str, ...] = (
+        "casual",
+        "professional",
+        "formal",
+    )
+    
+    detail_levels: tuple[str, ...] = (
+        "summary",
+        "standard",
+        "deep_dive",
+    )
+    
+    @property
+    def default_domain(self) -> str:
+        """Default domain when none specified."""
+        return self.domains[-1] if self.domains else "general"
+    
+    @property
+    def default_sentiment(self) -> str:
+        """Default sentiment."""
+        return "neutral"
+    
+    @property
+    def default_response_length(self) -> str:
+        """Default response length preference."""
+        return "medium"
+    
+    @property
+    def default_formality(self) -> str:
+        """Default formality level."""
+        return "professional"
+    
+    @property
+    def default_detail_level(self) -> str:
+        """Default detail level."""
+        return "standard"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Agent Identity (Autobiographical Memory source)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -306,7 +420,13 @@ class LoggingConfig:
 @dataclass
 class Config:
     """Master configuration container."""
+    # Domain configuration (platform-agnostic)
+    domain_config: DomainConfig = field(default_factory=DomainConfig)
+    
+    # Agent identity
     identity: AgentIdentity = field(default_factory=AgentIdentity)
+    
+    # Infrastructure
     paths: PathConfig = field(default_factory=PathConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     sqlite: SQLiteConfig = field(default_factory=SQLiteConfig)
@@ -320,6 +440,35 @@ class Config:
     # Environment
     env: str = field(default_factory=lambda: os.getenv("COGNICORE_ENV", "development"))
     debug: bool = field(default_factory=lambda: os.getenv("COGNICORE_DEBUG", "true").lower() == "true")
+    
+    # ── Convenience accessors ──
+    
+    @property
+    def domains(self) -> tuple[str, ...]:
+        """Get configured domains."""
+        return self.domain_config.domains
+    
+    @property
+    def entity_types(self) -> tuple[str, ...]:
+        """Get configured entity types."""
+        return self.domain_config.entity_types
+    
+    @property
+    def relation_types(self) -> tuple[str, ...]:
+        """Get configured relation types."""
+        return self.domain_config.relation_types
+    
+    def is_valid_domain(self, domain: str) -> bool:
+        """Check if a domain is valid."""
+        return domain in self.domain_config.domains
+    
+    def is_valid_entity_type(self, entity_type: str) -> bool:
+        """Check if an entity type is valid."""
+        return entity_type in self.domain_config.entity_types
+    
+    def is_valid_relation_type(self, relation_type: str) -> bool:
+        """Check if a relation type is valid."""
+        return relation_type in self.domain_config.relation_types
 
 
 # ══════════════════════════════════════════════════════════════════════════════

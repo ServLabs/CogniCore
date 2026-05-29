@@ -8,47 +8,17 @@ This module provides:
 - SessionSentiment for real-time sentiment tracking
 - UserPreferences for learned communication style
 - EmotionalMemory manager with SQLite persistence
+
+Note: Sentiment values and preference options are loaded from config.py
+to keep the platform domain-agnostic. No hardcoded enums.
 """
 
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Optional
 
 from config import config
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Enums
-# ══════════════════════════════════════════════════════════════════════════════
-
-class Sentiment(Enum):
-    """User sentiment classification."""
-    FRUSTRATED = "frustrated"
-    NEUTRAL = "neutral"
-    SATISFIED = "satisfied"
-
-
-class ResponseLength(Enum):
-    """Preferred response length."""
-    SHORT = "short"
-    MEDIUM = "medium"
-    DETAILED = "detailed"
-
-
-class Formality(Enum):
-    """Preferred communication formality."""
-    CASUAL = "casual"
-    PROFESSIONAL = "professional"
-    FORMAL = "formal"
-
-
-class DetailLevel(Enum):
-    """Preferred level of detail."""
-    SUMMARY = "summary"
-    STANDARD = "standard"
-    DEEP_DIVE = "deep_dive"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -61,11 +31,12 @@ class SentimentEvent:
     A single sentiment detection event.
     
     Recorded when sentiment is detected or shifts.
+    Sentiment values come from config.domain_config.sentiments.
     """
     id: str
     user_id: str
     convo_id: str
-    sentiment: Sentiment
+    sentiment: str  # From config.domain_config.sentiments
     confidence: float  # 0.0 - 1.0
     trigger: str  # What caused this sentiment
     context_snippet: str  # Brief excerpt of context
@@ -76,7 +47,7 @@ class SentimentEvent:
         cls,
         user_id: str,
         convo_id: str,
-        sentiment: Sentiment,
+        sentiment: str,
         confidence: float,
         trigger: str,
         context_snippet: str,
@@ -97,7 +68,7 @@ class SentimentEvent:
             "id": self.id,
             "user_id": self.user_id,
             "convo_id": self.convo_id,
-            "sentiment": self.sentiment.value,
+            "sentiment": self.sentiment,
             "confidence": self.confidence,
             "trigger": self.trigger,
             "context_snippet": self.context_snippet,
@@ -111,16 +82,22 @@ class SessionSentiment:
     Real-time sentiment state for an active session.
     
     Kept in memory for immediate response calibration.
+    Sentiment values come from config.domain_config.sentiments.
     """
     user_id: str
     convo_id: str
-    current_sentiment: Sentiment = Sentiment.NEUTRAL
+    current_sentiment: str = ""  # From config, defaults in __post_init__
     confidence: float = 0.5
-    sentiment_history: list[Sentiment] = field(default_factory=list)
+    sentiment_history: list[str] = field(default_factory=list)
     message_count: int = 0
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
-    def update(self, sentiment: Sentiment, confidence: float) -> bool:
+    def __post_init__(self):
+        """Set default sentiment from config if not provided."""
+        if not self.current_sentiment:
+            self.current_sentiment = config.domain_config.default_sentiment
+    
+    def update(self, sentiment: str, confidence: float) -> bool:
         """
         Update sentiment state.
         
@@ -146,9 +123,10 @@ class SessionSentiment:
     @property
     def has_been_frustrated(self) -> bool:
         """Check if user was frustrated at any point in session."""
+        frustrated = "frustrated"  # Convention: first sentiment is negative
         return (
-            self.current_sentiment == Sentiment.FRUSTRATED
-            or Sentiment.FRUSTRATED in self.sentiment_history
+            self.current_sentiment == frustrated
+            or frustrated in self.sentiment_history
         )
 
 
@@ -158,19 +136,29 @@ class UserPreferences:
     Learned user communication preferences.
     
     One row per user, updated over time.
+    Preference values come from config.domain_config.
     """
     user_id: str
-    response_length: ResponseLength = ResponseLength.MEDIUM
-    formality: Formality = Formality.PROFESSIONAL
-    detail_level: DetailLevel = DetailLevel.STANDARD
+    response_length: str = ""  # From config.domain_config.response_lengths
+    formality: str = ""  # From config.domain_config.formality_levels
+    detail_level: str = ""  # From config.domain_config.detail_levels
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    def __post_init__(self):
+        """Set defaults from config if not provided."""
+        if not self.response_length:
+            self.response_length = config.domain_config.default_response_length
+        if not self.formality:
+            self.formality = config.domain_config.default_formality
+        if not self.detail_level:
+            self.detail_level = config.domain_config.default_detail_level
     
     def to_dict(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
-            "response_length": self.response_length.value,
-            "formality": self.formality.value,
-            "detail_level": self.detail_level.value,
+            "response_length": self.response_length,
+            "formality": self.formality,
+            "detail_level": self.detail_level,
             "updated_at": self.updated_at.isoformat(),
         }
     
@@ -178,9 +166,9 @@ class UserPreferences:
     def from_dict(cls, data: dict[str, Any]) -> "UserPreferences":
         return cls(
             user_id=data["user_id"],
-            response_length=ResponseLength(data["response_length"]),
-            formality=Formality(data["formality"]),
-            detail_level=DetailLevel(data["detail_level"]),
+            response_length=data["response_length"],
+            formality=data["formality"],
+            detail_level=data["detail_level"],
             updated_at=datetime.fromisoformat(data["updated_at"]),
         )
     
@@ -188,19 +176,22 @@ class UserPreferences:
         """Generate hints for LLM based on preferences."""
         hints = []
         
-        if self.response_length == ResponseLength.SHORT:
+        # Response length hints
+        if self.response_length == "short":
             hints.append("Keep responses concise and to the point.")
-        elif self.response_length == ResponseLength.DETAILED:
+        elif self.response_length == "detailed":
             hints.append("Provide comprehensive, detailed responses.")
         
-        if self.formality == Formality.CASUAL:
+        # Formality hints
+        if self.formality == "casual":
             hints.append("Use a casual, friendly tone.")
-        elif self.formality == Formality.FORMAL:
+        elif self.formality == "formal":
             hints.append("Use formal, professional language.")
         
-        if self.detail_level == DetailLevel.SUMMARY:
+        # Detail level hints
+        if self.detail_level == "summary":
             hints.append("Focus on high-level summaries.")
-        elif self.detail_level == DetailLevel.DEEP_DIVE:
+        elif self.detail_level == "deep_dive":
             hints.append("Include in-depth analysis and details.")
         
         return " ".join(hints) if hints else ""
@@ -311,7 +302,7 @@ class EmotionalMemory:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event.id, event.user_id, event.convo_id,
-                    event.sentiment.value, event.confidence,
+                    event.sentiment, event.confidence,
                     event.trigger, event.context_snippet,
                     event.timestamp.isoformat(),
                 ))
@@ -332,9 +323,9 @@ class EmotionalMemory:
                 VALUES (?, ?, ?, ?, ?)
             """, (
                 prefs.user_id,
-                prefs.response_length.value,
-                prefs.formality.value,
-                prefs.detail_level.value,
+                prefs.response_length,
+                prefs.formality,
+                prefs.detail_level,
                 prefs.updated_at.isoformat(),
             ))
             await db.commit()
@@ -455,9 +446,9 @@ class EmotionalMemory:
     async def update_preferences(
         self,
         user_id: str,
-        response_length: Optional[ResponseLength] = None,
-        formality: Optional[Formality] = None,
-        detail_level: Optional[DetailLevel] = None,
+        response_length: Optional[str] = None,
+        formality: Optional[str] = None,
+        detail_level: Optional[str] = None,
     ) -> UserPreferences:
         """
         Update user preferences.
@@ -561,13 +552,13 @@ class EmotionalMemory:
         hints = []
         
         # Sentiment-based hints
-        if session.current_sentiment == Sentiment.FRUSTRATED:
+        if session.current_sentiment == "frustrated":
             hints.append("User seems frustrated. Be extra clear, acknowledge any issues, and focus on solutions.")
-        elif session.current_sentiment == Sentiment.SATISFIED:
+        elif session.current_sentiment == "satisfied":
             hints.append("User is satisfied. Maintain current approach.")
         
         # Recovery hint
-        if session.has_been_frustrated and session.current_sentiment != Sentiment.FRUSTRATED:
+        if session.has_been_frustrated and session.current_sentiment != "frustrated":
             hints.append("User was previously frustrated but has recovered. Continue carefully.")
         
         # Preference hints
