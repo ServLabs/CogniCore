@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

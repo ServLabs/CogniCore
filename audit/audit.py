@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

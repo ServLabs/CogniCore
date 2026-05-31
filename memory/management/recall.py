@@ -15,7 +15,7 @@ from collections.abc import Callable, Awaitable
 
 import numpy as np
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

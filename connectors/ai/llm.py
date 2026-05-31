@@ -7,7 +7,7 @@ Provider-agnostic — swapping is a config change, not a code change.
 
 from typing import Any, Optional
 
-from config import config
+from core import config
 from connectors.base import BaseConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 

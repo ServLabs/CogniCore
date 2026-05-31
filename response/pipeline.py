@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from config import config
+from core import config
 from response.gate import Gate, GateResult, GateDecision, get_gate
 from response.thinking import Thinker, ThoughtPlan, get_thinker
 from response.decision import DecisionMaker, ExecutionPlan, ExecutionStrategy, get_decision_maker

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from config import config
+from core import config
 from response.thinking import ThoughtPlan
 from response.decision import ExecutionPlan
 

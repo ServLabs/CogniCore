@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

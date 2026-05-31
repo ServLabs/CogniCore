@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 from collections.abc import Callable
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

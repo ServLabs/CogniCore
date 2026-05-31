@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -39,6 +39,13 @@ class ResourceLimits:
     request_timeout_seconds: int = 60
     skill_timeout_seconds: int = 30
     sub_agent_timeout_seconds: int = 120
+    
+    # Section 15: Ingestion limits
+    ingestion_requests_per_minute: int = 10
+    ingestion_requests_per_hour: int = 100
+    ingestion_max_text_size_kb: int = 1024      # 1MB max per text
+    ingestion_max_file_size_mb: int = 10        # 10MB max per file
+    ingestion_max_facts_per_request: int = 100
     
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -255,3 +262,199 @@ def get_governor() -> Governor:
     if _governor_instance is None:
         _governor_instance = Governor()
     return _governor_instance
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 15: Ingestion Rate Limiting
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class IngestionVerdict:
+    """Result of ingestion authorization check."""
+    allowed: bool
+    reason: str = ""
+    wait_seconds: float = 0.0
+    suggestion: str = ""
+
+
+class IngestionRateLimiter:
+    """
+    Rate limiter specifically for ingestion API.
+    
+    Enforces:
+    - Requests per minute/hour
+    - Max text/file size
+    - Max facts per request
+    """
+    
+    def __init__(self, limits: ResourceLimits):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            limits: Resource limits.
+        """
+        self.limits = limits
+        self._timestamps: list[datetime] = []
+    
+    def _prune_timestamps(self) -> None:
+        """Remove timestamps older than 1 hour."""
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=1)
+        self._timestamps = [t for t in self._timestamps if t > cutoff]
+    
+    def check_rate_limit(self) -> IngestionVerdict:
+        """
+        Check if ingestion is rate limited.
+        
+        Returns:
+            IngestionVerdict with allowed status.
+        """
+        now = datetime.now(timezone.utc)
+        self._prune_timestamps()
+        
+        # Check per-minute limit
+        minute_ago = now - timedelta(minutes=1)
+        calls_last_minute = sum(1 for t in self._timestamps if t > minute_ago)
+        
+        if calls_last_minute >= self.limits.ingestion_requests_per_minute:
+            oldest_in_minute = min(t for t in self._timestamps if t > minute_ago)
+            wait = 60 - (now - oldest_in_minute).total_seconds()
+            
+            return IngestionVerdict(
+                allowed=False,
+                reason="rate_limited",
+                wait_seconds=max(0, wait),
+                suggestion=f"Rate limit: {calls_last_minute}/{self.limits.ingestion_requests_per_minute} per minute",
+            )
+        
+        # Check per-hour limit
+        calls_last_hour = len(self._timestamps)
+        
+        if calls_last_hour >= self.limits.ingestion_requests_per_hour:
+            oldest = min(self._timestamps)
+            wait = 3600 - (now - oldest).total_seconds()
+            
+            return IngestionVerdict(
+                allowed=False,
+                reason="rate_limited",
+                wait_seconds=max(0, wait),
+                suggestion=f"Hourly limit: {calls_last_hour}/{self.limits.ingestion_requests_per_hour} per hour",
+            )
+        
+        return IngestionVerdict(allowed=True)
+    
+    def check_text_size(self, size_bytes: int) -> IngestionVerdict:
+        """
+        Check if text size is within limits.
+        
+        Args:
+            size_bytes: Size in bytes.
+            
+        Returns:
+            IngestionVerdict.
+        """
+        size_kb = size_bytes / 1024
+        
+        if size_kb > self.limits.ingestion_max_text_size_kb:
+            return IngestionVerdict(
+                allowed=False,
+                reason="size_exceeded",
+                suggestion=f"Text too large: {size_kb:.1f}KB > {self.limits.ingestion_max_text_size_kb}KB. Split into smaller chunks.",
+            )
+        
+        return IngestionVerdict(allowed=True)
+    
+    def check_file_size(self, size_bytes: int) -> IngestionVerdict:
+        """
+        Check if file size is within limits.
+        
+        Args:
+            size_bytes: Size in bytes.
+            
+        Returns:
+            IngestionVerdict.
+        """
+        size_mb = size_bytes / (1024 * 1024)
+        
+        if size_mb > self.limits.ingestion_max_file_size_mb:
+            return IngestionVerdict(
+                allowed=False,
+                reason="size_exceeded",
+                suggestion=f"File too large: {size_mb:.1f}MB > {self.limits.ingestion_max_file_size_mb}MB",
+            )
+        
+        return IngestionVerdict(allowed=True)
+    
+    def check_facts_count(self, count: int) -> IngestionVerdict:
+        """
+        Check if facts count is within limits.
+        
+        Args:
+            count: Number of facts.
+            
+        Returns:
+            IngestionVerdict.
+        """
+        if count > self.limits.ingestion_max_facts_per_request:
+            return IngestionVerdict(
+                allowed=False,
+                reason="count_exceeded",
+                suggestion=f"Too many facts: {count} > {self.limits.ingestion_max_facts_per_request}. Split into batches.",
+            )
+        
+        return IngestionVerdict(allowed=True)
+    
+    def authorize(
+        self,
+        size_bytes: int = 0,
+        facts_count: int = 0,
+        is_file: bool = False,
+    ) -> IngestionVerdict:
+        """
+        Full authorization check for ingestion.
+        
+        Args:
+            size_bytes: Size of content.
+            facts_count: Number of facts (if applicable).
+            is_file: Whether this is a file upload.
+            
+        Returns:
+            IngestionVerdict.
+        """
+        # Check rate limit first
+        verdict = self.check_rate_limit()
+        if not verdict.allowed:
+            return verdict
+        
+        # Check size
+        if is_file:
+            verdict = self.check_file_size(size_bytes)
+        else:
+            verdict = self.check_text_size(size_bytes)
+        
+        if not verdict.allowed:
+            return verdict
+        
+        # Check facts count
+        if facts_count > 0:
+            verdict = self.check_facts_count(facts_count)
+            if not verdict.allowed:
+                return verdict
+        
+        return IngestionVerdict(allowed=True)
+    
+    def record_request(self) -> None:
+        """Record an ingestion request."""
+        self._timestamps.append(datetime.now(timezone.utc))
+
+
+_ingestion_limiter: Optional[IngestionRateLimiter] = None
+
+
+def get_ingestion_limiter() -> IngestionRateLimiter:
+    """Get the singleton IngestionRateLimiter."""
+    global _ingestion_limiter
+    if _ingestion_limiter is None:
+        _ingestion_limiter = IngestionRateLimiter(get_governor().limits)
+    return _ingestion_limiter

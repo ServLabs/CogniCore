@@ -1,15 +1,29 @@
+#!/usr/bin/env python3
 """
-Agent Bootstrap
+CogniCore - Run Server
 
-Wires all systems together and starts the event loop.
+Wires all systems together and starts the servers.
 Called once, runs forever (until shutdown signal).
+
+Servers:
+- WebSocket (server/): Chat/agent conversations on WS_PORT (default: 8765)
+- REST API (api/): Ingestion, metrics, evals, admin on REST_PORT (default: 8080)
+
+Usage:
+    python run.py
+    
+Environment Variables:
+    COGNICORE_WS_PORT     - WebSocket server port (default: 8765)
+    COGNICORE_REST_PORT   - REST API port (default: 8080)
+    COGNICORE_DATA_DIR    - Data directory (default: /datadrive)
+    COGNICORE_DEBUG       - Enable debug mode (default: false)
 """
 
 import asyncio
 import signal
 from typing import Any, Optional
 
-from config import config
+from core import config, log
 from audit import audit
 
 
@@ -27,12 +41,14 @@ async def bootstrap() -> dict[str, Any]:
     3. Memory (SQLite, Redis, Kuzu, FAISS)
     4. Core Systems (MML, Analytics, Response)
     5. Control (Governor, Salience, DMN, CEN)
-    6. Sessions + API (WebSocket server)
+    6. Migrations (run pending)
+    7. Servers (WebSocket + REST)
     
     Returns:
         Dict with all initialized components.
     """
     audit.log_raw("agent", "boot", "main", "started")
+    log.info("CogniCore bootstrap starting...")
     
     components: dict[str, Any] = {}
     
@@ -45,6 +61,7 @@ async def bootstrap() -> dict[str, Any]:
             "completed",
             details={"debug": config.debug},
         )
+        log.info(f"Config loaded: debug={config.debug}")
         
         # Phase 2: Connectors
         from connectors.registry import get_registry
@@ -74,6 +91,7 @@ async def bootstrap() -> dict[str, Any]:
             "completed",
             details={"connect": connect_results, "health": health},
         )
+        log.info(f"Connectors ready: {len(connect_results)} connected")
         
         components["registry"] = registry
         
@@ -88,6 +106,7 @@ async def bootstrap() -> dict[str, Any]:
         pm = get_prospective_memory()
         
         audit.log_raw("agent", "memory_ready", "main", "completed")
+        log.info("Memory systems initialized")
         
         components["meta"] = meta
         components["sfm"] = sfm
@@ -103,6 +122,7 @@ async def bootstrap() -> dict[str, Any]:
         pipeline = get_pipeline()
         
         audit.log_raw("agent", "core_ready", "main", "completed")
+        log.info("Core systems initialized")
         
         components["mml"] = mml
         components["analytics"] = analytics
@@ -117,39 +137,27 @@ async def bootstrap() -> dict[str, Any]:
         cen = get_cen()
         
         audit.log_raw("agent", "control_ready", "main", "completed")
+        log.info("Control systems initialized")
         
         components["governor"] = governor
         components["salience"] = salience
         components["dmn"] = dmn
         components["cen"] = cen
         
-        # Phase 6: Sessions + API
-        from agent.sessions import SessionManager
-        from agent.api import WebSocketServer
+        # Phase 6: Run migrations
+        from migrations import migrate
         
-        sessions = SessionManager()
-        api = WebSocketServer(sessions)
+        migrate(config.paths.hot_db)
+        migrate(config.paths.cold_db)
         
-        await api.start(
-            host=config.api.ws_host,
-            port=config.api.ws_port,
-        )
+        audit.log_raw("agent", "migrations_complete", "main", "completed")
+        log.info("Migrations complete")
         
-        audit.log_raw(
-            "agent",
-            "api_ready",
-            "main",
-            "completed",
-            details={"port": config.api.ws_port},
-        )
-        
-        components["sessions"] = sessions
-        components["api"] = api
-        
-        # Start CEN
+        # Phase 7: Start CEN
         await cen.start()
         
         audit.log_raw("agent", "boot", "main", "completed")
+        log.info("CogniCore bootstrap complete")
         
         return components
     
@@ -161,6 +169,7 @@ async def bootstrap() -> dict[str, Any]:
             "failed",
             error=str(e),
         )
+        log.error(f"Bootstrap failed: {e}", exc_info=True)
         raise
 
 
@@ -172,17 +181,13 @@ async def shutdown(components: dict[str, Any]) -> None:
         components: Dict of initialized components from bootstrap.
     """
     audit.log_raw("agent", "shutdown", "main", "started")
+    log.info("Shutdown starting...")
     
     try:
         # Stop CEN
         cen = components.get("cen")
         if cen:
             await cen.stop()
-        
-        # Stop API
-        api = components.get("api")
-        if api:
-            await api.stop()
         
         # Disconnect connectors
         registry = components.get("registry")
@@ -193,6 +198,7 @@ async def shutdown(components: dict[str, Any]) -> None:
         audit.close()
         
         audit.log_raw("agent", "shutdown", "main", "completed")
+        log.info("Shutdown complete")
     
     except Exception as e:
         audit.log_raw(
@@ -202,6 +208,7 @@ async def shutdown(components: dict[str, Any]) -> None:
             "failed",
             error=str(e),
         )
+        log.error(f"Shutdown error: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -210,17 +217,23 @@ async def shutdown(components: dict[str, Any]) -> None:
 
 def main() -> None:
     """
-    Main entry point for the agent.
+    Main entry point for CogniCore.
     
-    Usage: python -m agent.bootstrap
+    Starts both servers:
+    - WebSocket server (server/) on WS_PORT
+    - REST API (api/) on REST_PORT
+    
+    Usage: python run.py
     """
+    import uvicorn
+    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
     components: dict[str, Any] = {}
     
     try:
-        # Bootstrap
+        # Bootstrap core systems
         components = loop.run_until_complete(bootstrap())
         
         # Setup signal handlers for graceful shutdown
@@ -231,9 +244,46 @@ def main() -> None:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, signal_handler)
         
-        # Run forever
-        print(f"CogniCore agent running on ws://{config.api.ws_host}:{config.api.ws_port}")
-        loop.run_forever()
+        # Start servers
+        print(f"CogniCore starting...")
+        print(f"  WebSocket: ws://{config.api.ws_host}:{config.api.ws_port}/ws")
+        print(f"  REST API:  http://{config.api.rest_host}:{config.api.rest_port}")
+        
+        # Run both servers
+        # In production, use a process manager like supervisord
+        # For development, we run them in the same process
+        
+        from server.app import get_app as get_server_app
+        from api.app import get_app as get_api_app
+        
+        server_app = get_server_app()
+        api_app = get_api_app()
+        
+        # Create server configs
+        server_config = uvicorn.Config(
+            server_app,
+            host=config.api.ws_host,
+            port=config.api.ws_port,
+            log_level="info",
+        )
+        api_config = uvicorn.Config(
+            api_app,
+            host=config.api.rest_host,
+            port=config.api.rest_port,
+            log_level="info",
+        )
+        
+        server = uvicorn.Server(server_config)
+        api_server = uvicorn.Server(api_config)
+        
+        # Run both servers concurrently
+        async def run_servers():
+            await asyncio.gather(
+                server.serve(),
+                api_server.serve(),
+            )
+        
+        loop.run_until_complete(run_servers())
     
     except KeyboardInterrupt:
         loop.run_until_complete(shutdown(components))

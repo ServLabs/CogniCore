@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from config import config
+from core import config
 from control.salience import SalienceNetwork, AgentEvent, get_salience_network
 
 

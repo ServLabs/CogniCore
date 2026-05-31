@@ -8419,16 +8419,30 @@ class AuditedFAISSIndex:
 ```
 CogniCore/
 │
-├── config.py                        ← Root config — ALL env vars (Section 10.1)
-├── logger.py                        ← Root logger — DEBUG/INFO/WARN/ERROR (Section 10.2)
-├── redact.py                        ← Root PII redaction (Section 10.3)
+├── run.py                           ← Entry point — python run.py
+├── requirements.txt                 ← Python dependencies
+├── README.md                        ← Setup and usage guide
+│
+├── core/                            ← Core Utilities (Section 10)
+│   ├── config.py                    ← Root config — ALL env vars
+│   ├── logger.py                    ← Root logger — DEBUG/INFO/WARN/ERROR
+│   └── redact.py                    ← Root PII redaction
+│
+├── server/                          ← WebSocket Server (FastAPI)
+│   ├── app.py                       ← FastAPI app with /ws endpoint
+│   ├── websocket.py                 ← ConnectionManager, Session
+│   └── streaming.py                 ← EventStream, StreamEvent
+│
+├── api/                             ← REST API (FastAPI)
+│   ├── app.py                       ← FastAPI app with routers
+│   └── routes/
+│       ├── ingestion.py             ← POST /ingest/text, /file, /facts
+│       ├── metrics.py               ← GET /metrics/*
+│       ├── evals.py                 ← GET/POST /evals/*
+│       └── admin.py                 ← GET /admin/health, /config, /status
 │
 ├── agent/                           ← Agent Framework (Section 9)
-│   ├── main.py                      ← Entrypoint / bootstrap
-│   ├── api.py                       ← WebSocket streaming API
-│   ├── ingestion.py                 ← REST API for data ingestion
-│   ├── sessions.py                  ← Multi-user session management
-│   ├── stream.py                    ← EventStream + StreamEvent
+│   ├── ingestion.py                 ← Ingestion job processing
 │   └── errors.py                    ← Retry policies, fallback chains
 │
 ├── memory/                          ← Memory Layer (Section 2 + 4)

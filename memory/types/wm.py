@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -630,3 +630,130 @@ async def add_assistant_message(user_id: str, convo_id: str, content: str) -> Me
 async def get_context(user_id: str, convo_id: str) -> list[dict[str, str]]:
     """Get conversation context for LLM."""
     return await get_working_memory().get_context(user_id, convo_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 14: Health Monitoring & Reconnection
+# ══════════════════════════════════════════════════════════════════════════════
+
+class WorkingMemoryHealthMonitor:
+    """
+    Health monitoring for Working Memory.
+    
+    Monitors Redis availability and attempts reconnection.
+    Called periodically by CEN or DMN.
+    """
+    
+    def __init__(self, wm: WorkingMemory):
+        """
+        Initialize health monitor.
+        
+        Args:
+            wm: Working Memory instance to monitor.
+        """
+        self.wm = wm
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 10
+    
+    async def health_check(self) -> dict[str, Any]:
+        """
+        Check WM health status.
+        
+        Returns:
+            Health status dict.
+        """
+        redis_ok = await self.wm._redis_available_check()
+        
+        return {
+            "redis_connected": redis_ok,
+            "fallback_mode": not redis_ok,
+            "local_conversations": len(self.wm._conversations),
+            "reconnect_attempts": self._reconnect_attempts,
+        }
+    
+    async def try_reconnect(self) -> bool:
+        """
+        Attempt to reconnect to Redis.
+        
+        Returns:
+            True if reconnected successfully.
+        """
+        from logger import log
+        from audit import audit
+        
+        if self.wm._redis_available:
+            return True
+        
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
+            return False
+        
+        self._reconnect_attempts += 1
+        
+        try:
+            if self.wm.redis:
+                await self.wm.redis.ping()
+                
+                log.info("WM: Redis reconnected, syncing local cache...")
+                audit.log_raw("wm", "redis_reconnect", "health", "completed")
+                
+                # Sync local cache to Redis
+                await self._sync_local_to_redis()
+                
+                self.wm._redis_available = True
+                self._reconnect_attempts = 0
+                return True
+        except Exception as e:
+            log.warning(f"WM: Redis reconnect failed: {e}")
+        
+        return False
+    
+    async def _sync_local_to_redis(self) -> None:
+        """Sync local cache back to Redis after reconnection."""
+        for cache_key, convo in self.wm._conversations.items():
+            # Push messages to Redis
+            for msg in convo.messages:
+                await self.wm._push_message_redis(
+                    convo.user_id,
+                    convo.conversation_id,
+                    msg,
+                )
+            
+            # Push summary if exists
+            if convo.summary:
+                await self.wm._save_summary_redis(
+                    convo.user_id,
+                    convo.conversation_id,
+                    convo.summary,
+                )
+    
+    async def monitor_loop(self, interval_seconds: int = 60) -> None:
+        """
+        Background monitoring loop.
+        
+        Args:
+            interval_seconds: Check interval.
+        """
+        from logger import log
+        from analytics import get_analytics
+        
+        while True:
+            await asyncio.sleep(interval_seconds)
+            
+            health = await self.health_check()
+            
+            # Log metrics
+            try:
+                analytics = get_analytics()
+                analytics.log_metric("wm", "fallback_mode", 1 if health["fallback_mode"] else 0)
+            except Exception:
+                pass
+            
+            # Try reconnect if in fallback mode
+            if health["fallback_mode"]:
+                log.debug("WM: In fallback mode, attempting reconnect...")
+                await self.try_reconnect()
+
+
+def get_wm_health_monitor() -> WorkingMemoryHealthMonitor:
+    """Get a health monitor for the singleton WM."""
+    return WorkingMemoryHealthMonitor(get_working_memory())

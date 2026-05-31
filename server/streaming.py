@@ -13,10 +13,6 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Stream Event Schema
-# ══════════════════════════════════════════════════════════════════════════════
-
 @dataclass
 class StreamEvent:
     """
@@ -55,10 +51,6 @@ class StreamEvent:
             "is_final": self.is_final,
         }
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Event Stream
-# ══════════════════════════════════════════════════════════════════════════════
 
 class EventStream:
     """

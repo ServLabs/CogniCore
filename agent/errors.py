@@ -9,7 +9,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from logger import log
+from core import log
 
 
 # ══════════════════════════════════════════════════════════════════════════════

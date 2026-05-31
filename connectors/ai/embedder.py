@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from config import config
+from core import config
 from connectors.base import BaseConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 

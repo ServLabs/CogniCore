@@ -7,7 +7,7 @@ Async Snowflake connector. Wraps sync driver with asyncio.to_thread().
 import asyncio
 from typing import Any, Optional
 
-from config import config
+from core import config
 from connectors.base import BaseDataConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 

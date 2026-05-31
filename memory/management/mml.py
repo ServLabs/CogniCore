@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from config import config
+from core import config
 from memory.management.recall import RecallEngine, RecallResult, get_recall_engine
 from memory.management.budget import BudgetManager, ModelTier, TaskPriority, get_budget_manager
 

@@ -9,7 +9,7 @@ import re
 import time
 from typing import Any, Optional
 
-from config import config
+from core import config
 from connectors.base import BaseSandbox, SandboxResult, ConnectorInfo, ConnectorStatus, ConnectorType
 
 

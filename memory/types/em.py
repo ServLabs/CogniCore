@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from config import config
+from core import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

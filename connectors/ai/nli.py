@@ -8,7 +8,7 @@ Uses a local cross-encoder model (no LLM calls, ~1000 checks/second on CPU).
 import asyncio
 from typing import Optional
 
-from config import config
+from core import config
 from connectors.base import BaseConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 
