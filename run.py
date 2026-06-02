@@ -5,9 +5,14 @@ CogniCore - Run Server
 Wires all systems together and starts the servers.
 Called once, runs forever (until shutdown signal).
 
-Servers:
-- WebSocket (server/): Chat/agent conversations on WS_PORT (default: 8765)
-- REST API (api/): Ingestion, metrics, evals, admin on REST_PORT (default: 8080)
+Interfaces:
+- Chat (WebSocket): ws://localhost:8765/ws
+- REST API:         http://localhost:8080
+  - /admin/*        Admin endpoints
+  - /ingest/*       Ingestion endpoints
+  - /metrics/*      Metrics endpoints
+  - /evals/*        Evaluation endpoints
+  - /scheduled/*    Background task triggers
 
 Usage:
     python run.py
@@ -219,13 +224,15 @@ def main() -> None:
     """
     Main entry point for CogniCore.
     
-    Starts both servers:
-    - WebSocket server (server/) on WS_PORT
-    - REST API (api/) on REST_PORT
+    Starts both interfaces:
+    - Chat (WebSocket) on WS_PORT
+    - REST API on REST_PORT
     
     Usage: python run.py
     """
     import uvicorn
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -246,41 +253,57 @@ def main() -> None:
         
         # Start servers
         print(f"CogniCore starting...")
-        print(f"  WebSocket: ws://{config.api.ws_host}:{config.api.ws_port}/ws")
-        print(f"  REST API:  http://{config.api.rest_host}:{config.api.rest_port}")
+        print(f"  Chat:     ws://{config.api.ws_host}:{config.api.ws_port}/ws")
+        print(f"  REST API: http://{config.api.rest_host}:{config.api.rest_port}")
         
-        # Run both servers
-        # In production, use a process manager like supervisord
-        # For development, we run them in the same process
+        # Create apps from interfaces
+        from interfaces.chat import get_chat_app
+        from interfaces.admin import admin_router
+        from interfaces.service import service_router
+        from interfaces.scheduled import scheduled_router
         
-        from server.app import get_app as get_server_app
-        from api.app import get_app as get_api_app
+        # Chat app (WebSocket)
+        chat_app = get_chat_app()
         
-        server_app = get_server_app()
-        api_app = get_api_app()
+        # REST API app (admin + service + scheduled)
+        rest_app = FastAPI(
+            title="CogniCore API",
+            description="REST API for admin, service, and scheduled tasks",
+            version="1.0.0",
+        )
+        rest_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        rest_app.include_router(admin_router)
+        rest_app.include_router(service_router)
+        rest_app.include_router(scheduled_router)
         
         # Create server configs
-        server_config = uvicorn.Config(
-            server_app,
+        chat_config = uvicorn.Config(
+            chat_app,
             host=config.api.ws_host,
             port=config.api.ws_port,
             log_level="info",
         )
-        api_config = uvicorn.Config(
-            api_app,
+        rest_config = uvicorn.Config(
+            rest_app,
             host=config.api.rest_host,
             port=config.api.rest_port,
             log_level="info",
         )
         
-        server = uvicorn.Server(server_config)
-        api_server = uvicorn.Server(api_config)
+        chat_server = uvicorn.Server(chat_config)
+        rest_server = uvicorn.Server(rest_config)
         
         # Run both servers concurrently
         async def run_servers():
             await asyncio.gather(
-                server.serve(),
-                api_server.serve(),
+                chat_server.serve(),
+                rest_server.serve(),
             )
         
         loop.run_until_complete(run_servers())

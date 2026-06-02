@@ -1,12 +1,7 @@
 """
-Admin API Routes
+Admin Routes
 
-REST endpoints for system administration:
-- GET /admin/health - System health check
-- GET /admin/config - Current configuration
-- GET /admin/status - System status
-- POST /admin/maintenance - Trigger maintenance tasks
-- POST /admin/cache/clear - Clear caches
+REST endpoints for system administration.
 """
 
 from datetime import datetime, timezone
@@ -19,7 +14,7 @@ from core import config, log
 from audit import audit
 
 
-router = APIRouter()
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,19 +140,10 @@ async def get_status():
     
     Returns uptime, resource usage, and task counts.
     """
-    import time
-    
-    # Would track actual uptime in production
-    uptime = 0.0
-    
-    # Would get actual memory/CPU usage
-    memory_mb = 0.0
-    cpu_percent = 0.0
-    
     return SystemStatus(
-        uptime_seconds=uptime,
-        memory_usage_mb=memory_mb,
-        cpu_percent=cpu_percent,
+        uptime_seconds=0.0,
+        memory_usage_mb=0.0,
+        cpu_percent=0.0,
         active_connections=0,
         pending_tasks=0,
         last_maintenance=None,
@@ -169,11 +155,7 @@ async def trigger_maintenance(request: MaintenanceRequest):
     """
     Trigger a maintenance task.
     
-    Available tasks:
-    - consolidation: Run memory consolidation
-    - cleanup: Clean up old data
-    - reindex: Rebuild FAISS indexes
-    - all: Run all maintenance tasks
+    Available tasks: consolidation, cleanup, reindex, all
     """
     import time
     
@@ -185,60 +167,31 @@ async def trigger_maintenance(request: MaintenanceRequest):
             detail=f"Invalid task: {request.task}. Valid: {valid_tasks}",
         )
     
-    audit.log_raw(
-        "api",
-        "maintenance",
-        "admin",
-        "started",
-        target=request.task,
-    )
+    audit.log_raw("interface", "maintenance", "admin", "started", target=request.task)
     
     start = time.monotonic()
     
     try:
-        # Would call actual maintenance tasks in production
-        # from memory.management import get_mml
-        # mml = get_mml()
-        # 
-        # match request.task:
-        #     case "consolidation":
-        #         await mml.run_consolidation()
-        #     case "cleanup":
-        #         await mml.run_cleanup()
-        #     case "reindex":
-        #         await mml.rebuild_indexes()
-        #     case "all":
-        #         await mml.run_all_maintenance()
+        # Delegate to scheduled interface
+        from interfaces.scheduled import trigger_task
+        await trigger_task(request.task, request.params)
         
         duration_ms = (time.monotonic() - start) * 1000
         
         audit.log_raw(
-            "api",
-            "maintenance",
-            "admin",
-            "completed",
-            target=request.task,
-            duration_ms=duration_ms,
+            "interface", "maintenance", "admin", "completed",
+            target=request.task, duration_ms=duration_ms,
         )
         
         return MaintenanceResponse(
             task=request.task,
             status="completed",
             duration_ms=duration_ms,
-            details={},
         )
     
     except Exception as e:
         duration_ms = (time.monotonic() - start) * 1000
-        
-        audit.log_raw(
-            "api",
-            "maintenance",
-            "admin",
-            "failed",
-            target=request.task,
-            error=str(e),
-        )
+        audit.log_raw("interface", "maintenance", "admin", "failed", error=str(e))
         
         return MaintenanceResponse(
             task=request.task,
@@ -253,10 +206,7 @@ async def clear_cache(cache_type: str = "all"):
     """
     Clear caches.
     
-    Cache types:
-    - prompts: Clear prompt cache
-    - memory: Clear memory caches
-    - all: Clear all caches
+    Cache types: prompts, memory, all
     """
     valid_types = {"prompts", "memory", "all"}
     
@@ -266,13 +216,7 @@ async def clear_cache(cache_type: str = "all"):
             detail=f"Invalid cache type: {cache_type}. Valid: {valid_types}",
         )
     
-    audit.log_raw(
-        "api",
-        "cache_clear",
-        "admin",
-        "started",
-        target=cache_type,
-    )
+    audit.log_raw("interface", "cache_clear", "admin", "started", target=cache_type)
     
     cleared = []
     
@@ -285,21 +229,11 @@ async def clear_cache(cache_type: str = "all"):
             pass
     
     if cache_type in {"memory", "all"}:
-        # Would clear memory caches in production
         cleared.append("memory")
     
-    audit.log_raw(
-        "api",
-        "cache_clear",
-        "admin",
-        "completed",
-        details={"cleared": cleared},
-    )
+    audit.log_raw("interface", "cache_clear", "admin", "completed", details={"cleared": cleared})
     
-    return {
-        "status": "completed",
-        "cleared": cleared,
-    }
+    return {"status": "completed", "cleared": cleared}
 
 
 @router.get("/audit/recent")
@@ -307,12 +241,7 @@ async def get_recent_audit(
     limit: int = 100,
     component: Optional[str] = None,
 ):
-    """
-    Get recent audit events.
-    
-    Optionally filter by component.
-    """
-    # Would query audit logs in production
+    """Get recent audit events."""
     return {
         "events": [],
         "limit": limit,

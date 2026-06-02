@@ -1,8 +1,7 @@
 """
-Server Application
+Chat Application
 
-FastAPI application for WebSocket chat/agent conversations.
-This is the primary interface for end-user interactions.
+FastAPI application for WebSocket chat conversations.
 """
 
 import asyncio
@@ -15,8 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core import config, log
 from audit import audit
-from server.websocket import ConnectionManager, Session
-from server.streaming import EventStream
+from interfaces.chat.websocket import ConnectionManager, Session
+from interfaces.chat.streaming import EventStream
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -41,26 +40,23 @@ def get_manager() -> ConnectionManager:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    # Startup
-    log.info("Server starting...")
-    audit.log_raw("server", "startup", "app", "started")
+    log.info("Chat interface starting...")
+    audit.log_raw("interface", "startup", "chat", "started")
     
-    # Start background tasks
     cleanup_task = asyncio.create_task(_cleanup_loop())
     
     yield
     
-    # Shutdown
     cleanup_task.cancel()
-    audit.log_raw("server", "shutdown", "app", "completed")
-    log.info("Server stopped")
+    audit.log_raw("interface", "shutdown", "chat", "completed")
+    log.info("Chat interface stopped")
 
 
 async def _cleanup_loop():
     """Background task to clean up idle sessions."""
     manager = get_manager()
     while True:
-        await asyncio.sleep(300)  # Every 5 minutes
+        await asyncio.sleep(300)
         removed = manager.cleanup_idle_sessions()
         if removed > 0:
             log.info(f"Cleaned up {removed} idle sessions")
@@ -70,30 +66,23 @@ async def _cleanup_loop():
 # Application Factory
 # ══════════════════════════════════════════════════════════════════════════════
 
-def create_app() -> FastAPI:
-    """
-    Create the FastAPI application.
-    
-    Returns:
-        Configured FastAPI app.
-    """
+def create_chat_app() -> FastAPI:
+    """Create the FastAPI chat application."""
     app = FastAPI(
-        title="CogniCore Server",
-        description="WebSocket server for real-time chat/agent conversations",
+        title="CogniCore Chat",
+        description="WebSocket server for real-time chat conversations",
         version="1.0.0",
         lifespan=lifespan,
     )
     
-    # CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure in production
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     
-    # Register routes
     _register_routes(app)
     
     return app
@@ -106,10 +95,7 @@ def _register_routes(app: FastAPI):
     async def health():
         """Health check endpoint."""
         manager = get_manager()
-        return {
-            "status": "ok",
-            "connections": manager.get_status(),
-        }
+        return {"status": "ok", "connections": manager.get_status()}
     
     @app.websocket("/ws")
     async def websocket_endpoint(
@@ -117,13 +103,7 @@ def _register_routes(app: FastAPI):
         user_id: Optional[str] = Query(None),
         conversation_id: Optional[str] = Query(None),
     ):
-        """
-        WebSocket endpoint for chat.
-        
-        Query params:
-        - user_id: Optional user identifier
-        - conversation_id: Optional conversation to resume
-        """
+        """WebSocket endpoint for chat."""
         manager = get_manager()
         session = await manager.connect(websocket, user_id)
         
@@ -131,34 +111,25 @@ def _register_routes(app: FastAPI):
             session.conversation_id = conversation_id
         
         try:
-            # Send connection confirmation
             await websocket.send_json({
                 "type": "connected",
                 "session_id": session.session_id,
                 "conversation_id": session.conversation_id,
             })
             
-            # Message loop
             while True:
                 data = await websocket.receive_text()
                 await _handle_message(session, data)
         
         except WebSocketDisconnect:
             manager.disconnect(session.session_id)
-        
         except Exception as e:
             log.error(f"WebSocket error: {e}", exc_info=True)
             manager.disconnect(session.session_id)
 
 
 async def _handle_message(session: Session, raw_message: str):
-    """
-    Handle an incoming WebSocket message.
-    
-    Args:
-        session: User session.
-        raw_message: Raw message string.
-    """
+    """Handle an incoming WebSocket message."""
     try:
         message = json.loads(raw_message)
     except json.JSONDecodeError:
@@ -166,20 +137,16 @@ async def _handle_message(session: Session, raw_message: str):
         return
     
     session.touch()
-    
     msg_type = message.get("type", "message")
     
     match msg_type:
         case "message":
             await _handle_user_message(session, message)
-        
         case "cancel":
             await _handle_cancel(session)
-        
         case "ping":
             if session.websocket:
                 await session.websocket.send_json({"type": "pong"})
-        
         case "set_conversation":
             session.conversation_id = message.get("conversation_id")
             if session.websocket:
@@ -187,93 +154,51 @@ async def _handle_message(session: Session, raw_message: str):
                     "type": "conversation_set",
                     "conversation_id": session.conversation_id,
                 })
-        
         case _:
             await _send_error(session, f"Unknown message type: {msg_type}")
 
 
 async def _handle_user_message(session: Session, message: dict[str, Any]):
-    """
-    Handle a user chat message.
-    
-    Routes to pipeline and streams events back.
-    
-    Args:
-        session: User session.
-        message: Parsed message.
-    """
+    """Handle a user chat message."""
     text = message.get("text", "")
     if not text:
         await _send_error(session, "Empty message")
         return
     
     audit.log_raw(
-        "server",
-        "message_received",
-        "websocket",
-        "started",
-        session_id=session.session_id,
-        details={"length": len(text)},
+        "interface", "message_received", "chat", "started",
+        session_id=session.session_id, details={"length": len(text)},
     )
     
-    # Create event stream
     stream = session.create_stream()
-    
-    # Start streaming task
-    stream_task = asyncio.create_task(
-        _stream_events(session, stream)
-    )
+    stream_task = asyncio.create_task(_stream_events(session, stream))
     
     try:
-        # Process message through pipeline
-        # This would integrate with CEN/Response pipeline
         await _process_message(session, text, stream)
-    
     except Exception as e:
         log.error(f"Message processing error: {e}", exc_info=True)
         stream.emit_error(str(e), recoverable=False)
         stream.emit_done({"error": str(e)})
-    
     finally:
-        # Wait for streaming to complete
         await stream_task
 
 
-async def _process_message(
-    session: Session,
-    text: str,
-    stream: EventStream,
-):
-    """
-    Process a user message through the pipeline.
-    
-    Args:
-        session: User session.
-        text: User message text.
-        stream: Event stream for this request.
-    """
+async def _process_message(session: Session, text: str, stream: EventStream):
+    """Process a user message through the pipeline."""
     import time
     start_time = time.monotonic()
     
-    # Emit thinking event
     stream.emit_thinking("Analyzing your request...")
     
     try:
-        # Import and use response pipeline
         from response import get_pipeline
         from memory.types.wm import add_user_message, add_assistant_message
         
         pipeline = get_pipeline()
         
-        # Store user message in working memory
         if session.user_id and session.conversation_id:
-            await add_user_message(
-                session.user_id,
-                session.conversation_id,
-                text,
-            )
+            await add_user_message(session.user_id, session.conversation_id, text)
         
-        # Process through pipeline
         result = await pipeline.process(
             query=text,
             user_id=session.user_id,
@@ -281,15 +206,9 @@ async def _process_message(
             stream=stream,
         )
         
-        # Store assistant response in working memory
         if session.user_id and session.conversation_id and result.response:
-            await add_assistant_message(
-                session.user_id,
-                session.conversation_id,
-                result.response,
-            )
+            await add_assistant_message(session.user_id, session.conversation_id, result.response)
         
-        # Emit response
         stream.emit_response_chunk(result.response)
         
         elapsed_ms = (time.monotonic() - start_time) * 1000
@@ -301,12 +220,8 @@ async def _process_message(
         })
         
         audit.log_raw(
-            "server",
-            "message_processed",
-            "websocket",
-            "completed",
-            session_id=session.session_id,
-            duration_ms=elapsed_ms,
+            "interface", "message_processed", "chat", "completed",
+            session_id=session.session_id, duration_ms=elapsed_ms,
         )
     
     except Exception as e:
@@ -316,13 +231,7 @@ async def _process_message(
 
 
 async def _stream_events(session: Session, stream: EventStream):
-    """
-    Stream events from EventStream to WebSocket.
-    
-    Args:
-        session: User session.
-        stream: Event stream to consume.
-    """
+    """Stream events from EventStream to WebSocket."""
     if not session.websocket:
         return
     
@@ -338,27 +247,15 @@ async def _handle_cancel(session: Session):
     session.close_stream()
     
     if session.websocket:
-        await session.websocket.send_json({
-            "type": "cancelled",
-            "text": "Request cancelled",
-        })
+        await session.websocket.send_json({"type": "cancelled", "text": "Request cancelled"})
     
-    audit.log_raw(
-        "server",
-        "request_cancel",
-        "websocket",
-        "completed",
-        session_id=session.session_id,
-    )
+    audit.log_raw("interface", "request_cancel", "chat", "completed", session_id=session.session_id)
 
 
 async def _send_error(session: Session, error: str):
     """Send an error message to the client."""
     if session.websocket:
-        await session.websocket.send_json({
-            "type": "error",
-            "text": error,
-        })
+        await session.websocket.send_json({"type": "error", "text": error})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -368,9 +265,9 @@ async def _send_error(session: Session, error: str):
 _app: Optional[FastAPI] = None
 
 
-def get_app() -> FastAPI:
-    """Get the singleton FastAPI app."""
+def get_chat_app() -> FastAPI:
+    """Get the singleton FastAPI chat app."""
     global _app
     if _app is None:
-        _app = create_app()
+        _app = create_chat_app()
     return _app

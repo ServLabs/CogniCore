@@ -2,7 +2,6 @@
 Event Streaming
 
 Real-time event streaming from pipeline to WebSocket clients.
-Users see thinking, tool calls, memory recalls, decisions as they happen.
 """
 
 import asyncio
@@ -17,16 +16,14 @@ from typing import Any, Optional
 class StreamEvent:
     """
     Event streamed to the client during request processing.
-    
-    Every step in the pipeline emits a typed event.
     """
-    type: str              # event type (thinking, memory_recall, tool_call, etc.)
-    text: str              # human-readable description for UI
-    stage: str = ""        # pipeline stage: "gate" | "thinking" | "recall" | "execution" | "synthesis"
-    details: dict[str, Any] = field(default_factory=dict)  # type-specific payload
+    type: str
+    text: str
+    stage: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    sequence: int = 0      # ordering guarantee within a request
-    is_final: bool = False # True for the last event in a request
+    sequence: int = 0
+    is_final: bool = False
     
     def to_json(self) -> str:
         """Serialize to JSON for WebSocket transmission."""
@@ -61,37 +58,14 @@ class EventStream:
     """
     
     def __init__(self, session_id: str, conversation_id: str):
-        """
-        Initialize event stream.
-        
-        Args:
-            session_id: Session ID for this stream.
-            conversation_id: Conversation ID for this stream.
-        """
         self.session_id = session_id
         self.conversation_id = conversation_id
         self._queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._sequence = 0
         self._closed = False
     
-    def emit(
-        self,
-        type: str,
-        text: str,
-        stage: str = "",
-        **details,
-    ) -> None:
-        """
-        Emit an event to the stream.
-        
-        Called by pipeline stages.
-        
-        Args:
-            type: Event type.
-            text: Human-readable description.
-            stage: Pipeline stage.
-            **details: Additional details.
-        """
+    def emit(self, type: str, text: str, stage: str = "", **details) -> None:
+        """Emit an event to the stream."""
         if self._closed:
             return
         
@@ -109,50 +83,17 @@ class EventStream:
         """Emit a thinking event."""
         self.emit("thinking", text, stage=stage)
     
-    def emit_tool_call(
-        self,
-        tool: str,
-        description: str,
-        params: Optional[dict[str, Any]] = None,
-    ) -> None:
+    def emit_tool_call(self, tool: str, description: str, params: Optional[dict] = None) -> None:
         """Emit a tool call event."""
-        self.emit(
-            "tool_call",
-            description,
-            stage="execution",
-            tool=tool,
-            params=params or {},
-        )
+        self.emit("tool_call", description, stage="execution", tool=tool, params=params or {})
     
-    def emit_tool_result(
-        self,
-        tool: str,
-        summary: str,
-        duration_ms: float = 0,
-    ) -> None:
+    def emit_tool_result(self, tool: str, summary: str, duration_ms: float = 0) -> None:
         """Emit a tool result event."""
-        self.emit(
-            "tool_result",
-            summary,
-            stage="execution",
-            tool=tool,
-            duration_ms=duration_ms,
-        )
+        self.emit("tool_result", summary, stage="execution", tool=tool, duration_ms=duration_ms)
     
-    def emit_memory(
-        self,
-        text: str,
-        source: str = "",
-        count: int = 0,
-    ) -> None:
+    def emit_memory(self, text: str, source: str = "", count: int = 0) -> None:
         """Emit a memory recall event."""
-        self.emit(
-            "memory_recall",
-            text,
-            stage="recall",
-            source=source,
-            count=count,
-        )
+        self.emit("memory_recall", text, stage="recall", source=source, count=count)
     
     def emit_decision(self, text: str) -> None:
         """Emit a decision event."""
@@ -163,7 +104,7 @@ class EventStream:
         self.emit("error", text, stage="", recoverable=recoverable)
     
     def emit_response_chunk(self, text: str) -> None:
-        """Emit a response chunk (for streaming final response)."""
+        """Emit a response chunk."""
         self.emit("response", text, stage="synthesis")
     
     def emit_done(self, summary: Optional[dict[str, Any]] = None) -> None:
@@ -179,11 +120,7 @@ class EventStream:
         self._closed = True
     
     async def __aiter__(self) -> AsyncIterator[StreamEvent]:
-        """
-        Async iterator for consuming events.
-        
-        WebSocket handler uses this.
-        """
+        """Async iterator for consuming events."""
         while True:
             event = await self._queue.get()
             yield event
@@ -192,5 +129,4 @@ class EventStream:
     
     @property
     def is_closed(self) -> bool:
-        """Check if stream is closed."""
         return self._closed
