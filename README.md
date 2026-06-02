@@ -1,6 +1,13 @@
 # CogniCore
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![GitHub Issues](https://img.shields.io/github/issues/ServLabs/CogniCore)](https://github.com/ServLabs/CogniCore/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/ServLabs/CogniCore)](https://github.com/ServLabs/CogniCore/stargazers)
+
 A cognitive architecture for AI agents with human-like memory systems.
+
+**[Documentation](https://github.com/ServLabs/CogniCore/wiki)** · **[Report Bug](https://github.com/ServLabs/CogniCore/issues/new?template=bug_report.md)** · **[Request Feature](https://github.com/ServLabs/CogniCore/issues/new?template=feature_request.md)**
 
 ## Quick Start
 
@@ -14,8 +21,8 @@ A cognitive architecture for AI agents with human-like memory systems.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/cognicore.git
-cd cognicore
+git clone https://github.com/ServLabs/CogniCore.git
+cd CogniCore
 
 # Create virtual environment
 python -m venv venv
@@ -217,6 +224,18 @@ mypy .
 
 ---
 
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache License 2.0 - see [LICENSE](LICENSE) for details.
+
+## Security
+
+To report security vulnerabilities, please see [SECURITY.md](SECURITY.md).
+
+---
+
+Made with ❤️ by [ServLabs](https://github.com/ServLabs)

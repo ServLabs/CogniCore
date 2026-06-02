@@ -11,8 +11,8 @@ Get CogniCore running on your machine.
 
 ```bash
 # Clone and enter directory
-git clone https://github.com/your-org/cognicore.git
-cd cognicore
+git clone https://github.com/ServLabs/CogniCore.git
+cd CogniCore
 
 # Create virtual environment
 python -m venv venv
