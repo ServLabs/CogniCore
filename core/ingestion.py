@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from core import config, log
-from audit import audit
+from core.config import config
+from core.logger import log
+from core.audit import audit
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from core import config, log
-from audit import audit
+from core import audit
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])

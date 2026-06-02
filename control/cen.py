@@ -152,7 +152,7 @@ class CentralExecutiveNetwork:
         self._tasks.append(asyncio.create_task(self._event_loop()))
         
         # Record startup
-        from analytics import record_count
+        from observability import record_count
         await record_count("cen", "startup")
     
     async def stop(self) -> None:
@@ -187,7 +187,7 @@ class CentralExecutiveNetwork:
     async def _handle_event(self, event: AgentEvent) -> None:
         """Route event to the appropriate handler."""
         # Log to analytics
-        from analytics import record_count
+        from observability import record_count
         await record_count("cen", "event_received", dimensions={"type": event.type})
         
         # Check for registered handler
@@ -227,7 +227,7 @@ class CentralExecutiveNetwork:
             
             case _:
                 # Unknown event type - log and skip
-                from analytics import record_count
+                from observability import record_count
                 await record_count("cen", "unknown_event", dimensions={"type": event.type})
     
     async def _dispatch_to_handler(
@@ -331,7 +331,7 @@ class CentralExecutiveNetwork:
             await mml.check_integrity()
         
         # Log alert
-        from analytics import record_count
+        from observability import record_count
         await record_count("cen", "health_alert", dimensions={"type": alert_type})
     
     async def _handle_resource_pressure(self, event: AgentEvent) -> None:
@@ -364,7 +364,7 @@ class CentralExecutiveNetwork:
         dmn = get_dmn()
         asyncio.create_task(dmn.activate())
         
-        from analytics import record_count
+        from observability import record_count
         await record_count("cen", "mode_switch", dimensions={"to": "idle"})
     
     async def _switch_to_active(self) -> None:
@@ -378,7 +378,7 @@ class CentralExecutiveNetwork:
         dmn = get_dmn()
         dmn.deactivate()
         
-        from analytics import record_count
+        from observability import record_count
         await record_count("cen", "mode_switch", dimensions={"to": "active"})
     
     async def _mode_monitor(self) -> None:
@@ -394,7 +394,7 @@ class CentralExecutiveNetwork:
         """Deliver response to user."""
         # In production, this would send via WebSocket
         # For now, just log
-        from analytics import record_count
+        from observability import record_count
         await record_count("cen", "response_delivered")
     
     async def _queue_with_backpressure(self, event: AgentEvent) -> None:

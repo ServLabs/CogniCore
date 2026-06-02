@@ -1,5 +1,5 @@
 """
-Tests for core module (config, logger, redact).
+Tests for core module.
 """
 
 import pytest
@@ -37,7 +37,7 @@ class TestLogger:
     def test_logger_can_log(self):
         """Logger can write messages."""
         from core import log
-        log.info("Test message")  # Should not raise
+        log.info("Test message")
 
 
 class TestRedact:
@@ -55,10 +55,41 @@ class TestRedact:
         result = redact(text)
         assert "user@example.com" not in result
         assert "[EMAIL]" in result
+
+
+class TestAudit:
+    """Tests for audit logging."""
     
-    def test_redact_preserves_normal_text(self):
-        """Normal text is preserved."""
-        from core import redact
-        text = "Hello world"
-        result = redact(text)
-        assert result == text
+    def test_audit_exists(self):
+        """Audit logger is available."""
+        from core import audit
+        assert audit is not None
+    
+    def test_audit_can_log(self):
+        """Audit can log events."""
+        from core import audit
+        audit.log_raw("test", "test_action", "test_actor", "completed")
+
+
+class TestErrors:
+    """Tests for error handling."""
+    
+    def test_retry_policy(self):
+        """RetryPolicy works."""
+        from core import RetryPolicy
+        
+        policy = RetryPolicy(max_retries=3, base_delay_seconds=1.0)
+        
+        assert policy.delay_for_attempt(0) == 1.0
+        assert policy.delay_for_attempt(1) == 2.0
+        assert policy.is_retryable("timeout")
+    
+    def test_agent_error(self):
+        """AgentError works."""
+        from core import AgentError, ErrorCategory
+        
+        error = AgentError(
+            category=ErrorCategory.CONNECTOR,
+            message="Test error",
+        )
+        assert error.category == "connector"

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from audit import audit
+from core import audit
 from core import log
 
 

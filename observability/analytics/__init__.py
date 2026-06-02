@@ -1,11 +1,10 @@
 """
-Analytics Layer
+Analytics
 
-Cross-cutting metrics and performance tracking across the entire agent.
-Append-only numerical data for admin/developer dashboards.
+Runtime metrics and performance tracking.
 """
 
-from analytics.analytics import (
+from observability.analytics.analytics import (
     Analytics,
     get_analytics,
     record_metric,

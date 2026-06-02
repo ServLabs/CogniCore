@@ -13,7 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from core import config, log
-from audit import audit
+from core import audit
 from interfaces.chat.websocket import ConnectionManager, Session
 from interfaces.chat.streaming import EventStream
 

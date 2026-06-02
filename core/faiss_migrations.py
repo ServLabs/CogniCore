@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core import config, log
-from audit import audit
+from core import audit
 
 
 # ══════════════════════════════════════════════════════════════════════════════

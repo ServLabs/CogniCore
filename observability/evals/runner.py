@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
-from audit import audit
-from core import log
+from core import audit, log
 
 
 # ══════════════════════════════════════════════════════════════════════════════

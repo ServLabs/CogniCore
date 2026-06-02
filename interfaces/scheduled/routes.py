@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from core import log
-from audit import audit
+from core import audit
 from interfaces.scheduled.tasks import (
     trigger_task,
     get_task_status,

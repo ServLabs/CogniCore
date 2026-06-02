@@ -94,8 +94,8 @@ CogniCore implements a cognitive architecture inspired by human memory systems:
 │                              CogniCore                                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   server/   │  │    api/     │  │  response/  │  │  control/   │        │
-│  │  WebSocket  │  │    REST     │  │  Pipeline   │  │  CEN/DMN    │        │
+│  │ interfaces/ │  │  response/  │  │  control/   │  │observability│        │
+│  │ chat/admin  │  │  Pipeline   │  │  CEN/DMN    │  │analytics/eval│       │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
 │         │                │                │                │               │
 │         └────────────────┴────────────────┴────────────────┘               │
@@ -137,20 +137,21 @@ CogniCore implements a cognitive architecture inspired by human memory systems:
 ```
 CogniCore/
 ├── run.py                # Entry point - start servers
-├── core/                 # Config, logger, redact utilities
-├── server/               # WebSocket chat (FastAPI)
-├── api/                  # REST endpoints (FastAPI)
-│   └── routes/           # ingestion, metrics, evals, admin
+├── core/                 # Infrastructure (config, logger, audit, errors, migrations)
+├── interfaces/           # External APIs
+│   ├── admin/            # System administration
+│   ├── service/          # Developer APIs (ingestion, metrics, evals)
+│   ├── chat/             # WebSocket chat
+│   └── scheduled/        # Background task triggers
 ├── memory/               # 9 memory types + MML
 │   ├── types/            # ABM, WM, PM, EM, AM, MM, SFM, LFM, Meta
-│   └── management/       # MML, recall, budget, chunking
+│   └── management/       # MML, recall, budget, learning
 ├── response/             # Gate, pipeline, thinking, decision, synthesis
 ├── control/              # Salience Network, CEN, DMN, Governor
 ├── connectors/           # AI, data, sandbox connectors
-├── analytics/            # DuckDB metrics
-├── audit/                # Universal audit logging
-├── evals/                # Evaluation system
-├── migrations/           # Schema versioning
+├── observability/        # Monitoring
+│   ├── analytics/        # DuckDB metrics
+│   └── evals/            # Evaluation system
 └── prompts/              # LLM prompt templates
 ```
 
@@ -188,6 +189,9 @@ CogniCore/
 | GET | `/admin/health` | Health check |
 | GET | `/admin/config` | Current configuration |
 | POST | `/admin/maintenance` | Trigger maintenance |
+| GET | `/scheduled/tasks` | List background tasks |
+| POST | `/scheduled/consolidation` | Trigger memory consolidation |
+| POST | `/scheduled/learning/*` | Trigger learning algorithms |
 
 ---
 

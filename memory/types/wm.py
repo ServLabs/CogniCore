@@ -679,7 +679,7 @@ class WorkingMemoryHealthMonitor:
             True if reconnected successfully.
         """
         from logger import log
-        from audit import audit
+        from core import audit
         
         if self.wm._redis_available:
             return True
@@ -734,7 +734,7 @@ class WorkingMemoryHealthMonitor:
             interval_seconds: Check interval.
         """
         from logger import log
-        from analytics import get_analytics
+        from observability import get_analytics
         
         while True:
             await asyncio.sleep(interval_seconds)

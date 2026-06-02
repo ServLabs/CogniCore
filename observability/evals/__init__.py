@@ -13,8 +13,8 @@ Eval Types:
 - Learning Drift: Are learned facts diverging from ground truth?
 """
 
-from evals.runner import EvalRunner, EvalResult, get_eval_runner
-from evals.metrics import (
+from observability.evals.runner import EvalRunner, EvalResult, get_eval_runner
+from observability.evals.metrics import (
     precision_at_k,
     recall_at_k,
     f1_score,

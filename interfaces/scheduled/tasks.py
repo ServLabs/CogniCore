@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from core import log
-from audit import audit
+from core import audit
 
 
 @dataclass

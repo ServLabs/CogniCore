@@ -124,7 +124,7 @@ class DefaultModeNetwork:
         
         Queries analytics for recent performance and identifies weak areas.
         """
-        from analytics import query_metrics
+        from observability import query_metrics
         
         result = ReflectionResult(timestamp=datetime.now(timezone.utc))
         weak_areas = []
@@ -192,7 +192,7 @@ class DefaultModeNetwork:
         self._last_reflection = result
         
         # Log reflection
-        from analytics import record_metric
+        from observability import record_metric
         await record_metric("dmn", "self_reflection", 1, result.to_dict())
         
         # Create remediation tasks for weak areas
@@ -210,7 +210,7 @@ class DefaultModeNetwork:
         if not self.active:
             return PlanningResult(timestamp=datetime.now(timezone.utc))
         
-        from analytics import query_metrics
+        from observability import query_metrics
         
         result = PlanningResult(timestamp=datetime.now(timezone.utc))
         
@@ -239,7 +239,7 @@ class DefaultModeNetwork:
         self._last_planning = result
         
         # Log planning
-        from analytics import record_metric
+        from observability import record_metric
         await record_metric("dmn", "spontaneous_planning", 1, result.to_dict())
         
         return result

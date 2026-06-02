@@ -15,7 +15,7 @@ from typing import Any, Optional
 from collections.abc import Callable
 
 from core import config, log
-from audit import audit
+from core import audit
 
 
 @dataclass

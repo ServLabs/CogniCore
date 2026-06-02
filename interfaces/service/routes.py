@@ -15,7 +15,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from core import config, log
-from audit import audit
+from core import audit
 
 
 router = APIRouter(tags=["service"])
@@ -325,7 +325,7 @@ async def list_evals(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """List recent eval results."""
-    from evals import get_eval_runner
+    from observability import get_eval_runner
     
     runner = get_eval_runner()
     results = runner.get_recent_results(eval_type=eval_type, limit=limit)
@@ -347,21 +347,21 @@ async def list_evals(
 @router.get("/evals/types")
 async def list_eval_types():
     """List all registered eval types."""
-    from evals import get_eval_runner
+    from observability import get_eval_runner
     return {"eval_types": get_eval_runner().list_evals()}
 
 
 @router.get("/evals/summary")
 async def get_eval_summary():
     """Get summary of all eval results."""
-    from evals import get_eval_runner
+    from observability import get_eval_runner
     return get_eval_runner().get_summary()
 
 
 @router.post("/evals/run")
 async def run_eval(request: RunEvalRequest):
     """Trigger an eval run."""
-    from evals import get_eval_runner
+    from observability import get_eval_runner
     
     runner = get_eval_runner()
     

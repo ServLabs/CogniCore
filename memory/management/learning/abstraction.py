@@ -22,7 +22,7 @@ from collections.abc import Callable, Awaitable
 import numpy as np
 
 from core import config, log
-from audit import audit
+from core import audit
 
 
 @dataclass

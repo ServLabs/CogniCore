@@ -28,8 +28,7 @@ import asyncio
 import signal
 from typing import Any, Optional
 
-from core import config, log
-from audit import audit
+from core import config, log, audit
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -119,7 +118,7 @@ async def bootstrap() -> dict[str, Any]:
         
         # Phase 4: Core Systems
         from memory.management import get_mml
-        from analytics import get_analytics
+        from observability import get_analytics
         from response import get_pipeline
         
         mml = get_mml()
@@ -150,7 +149,7 @@ async def bootstrap() -> dict[str, Any]:
         components["cen"] = cen
         
         # Phase 6: Run migrations
-        from migrations import migrate
+        from core import migrate
         
         migrate(config.paths.hot_db)
         migrate(config.paths.cold_db)
