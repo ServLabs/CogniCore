@@ -275,7 +275,7 @@ Provide:
         execution_plan: ExecutionPlan,
     ) -> None:
         """Record pipeline metrics to analytics."""
-        from analytics import record_latency, record_count
+        from observability import record_latency, record_count
         
         await record_latency("response", "pipeline", elapsed_ms)
         await record_count("response", f"complexity_{thought_plan.complexity.value}")

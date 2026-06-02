@@ -201,7 +201,7 @@ class ScheduleRecovery:
         Returns:
             Number of jobs recovered.
         """
-        from audit import audit
+        from core import audit
         
         # Find jobs that were scheduled but not executed
         missed = await self._find_missed_jobs()

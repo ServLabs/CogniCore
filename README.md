@@ -1,6 +1,13 @@
 # CogniCore
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![GitHub Issues](https://img.shields.io/github/issues/ServLabs/CogniCore)](https://github.com/ServLabs/CogniCore/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/ServLabs/CogniCore)](https://github.com/ServLabs/CogniCore/stargazers)
+
 A cognitive architecture for AI agents with human-like memory systems.
+
+**[Documentation](https://github.com/ServLabs/CogniCore/wiki)** · **[Report Bug](https://github.com/ServLabs/CogniCore/issues/new?template=bug_report.md)** · **[Request Feature](https://github.com/ServLabs/CogniCore/issues/new?template=feature_request.md)**
 
 ## Quick Start
 
@@ -14,8 +21,8 @@ A cognitive architecture for AI agents with human-like memory systems.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/cognicore.git
-cd cognicore
+git clone https://github.com/ServLabs/CogniCore.git
+cd CogniCore
 
 # Create virtual environment
 python -m venv venv
@@ -94,8 +101,8 @@ CogniCore implements a cognitive architecture inspired by human memory systems:
 │                              CogniCore                                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   server/   │  │    api/     │  │  response/  │  │  control/   │        │
-│  │  WebSocket  │  │    REST     │  │  Pipeline   │  │  CEN/DMN    │        │
+│  │ interfaces/ │  │  response/  │  │  control/   │  │observability│        │
+│  │ chat/admin  │  │  Pipeline   │  │  CEN/DMN    │  │analytics/eval│       │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
 │         │                │                │                │               │
 │         └────────────────┴────────────────┴────────────────┘               │
@@ -137,20 +144,21 @@ CogniCore implements a cognitive architecture inspired by human memory systems:
 ```
 CogniCore/
 ├── run.py                # Entry point - start servers
-├── core/                 # Config, logger, redact utilities
-├── server/               # WebSocket chat (FastAPI)
-├── api/                  # REST endpoints (FastAPI)
-│   └── routes/           # ingestion, metrics, evals, admin
+├── core/                 # Infrastructure (config, logger, audit, errors, migrations)
+├── interfaces/           # External APIs
+│   ├── admin/            # System administration
+│   ├── service/          # Developer APIs (ingestion, metrics, evals)
+│   ├── chat/             # WebSocket chat
+│   └── scheduled/        # Background task triggers
 ├── memory/               # 9 memory types + MML
 │   ├── types/            # ABM, WM, PM, EM, AM, MM, SFM, LFM, Meta
-│   └── management/       # MML, recall, budget, chunking
+│   └── management/       # MML, recall, budget, learning
 ├── response/             # Gate, pipeline, thinking, decision, synthesis
 ├── control/              # Salience Network, CEN, DMN, Governor
 ├── connectors/           # AI, data, sandbox connectors
-├── analytics/            # DuckDB metrics
-├── audit/                # Universal audit logging
-├── evals/                # Evaluation system
-├── migrations/           # Schema versioning
+├── observability/        # Monitoring
+│   ├── analytics/        # DuckDB metrics
+│   └── evals/            # Evaluation system
 └── prompts/              # LLM prompt templates
 ```
 
@@ -188,6 +196,9 @@ CogniCore/
 | GET | `/admin/health` | Health check |
 | GET | `/admin/config` | Current configuration |
 | POST | `/admin/maintenance` | Trigger maintenance |
+| GET | `/scheduled/tasks` | List background tasks |
+| POST | `/scheduled/consolidation` | Trigger memory consolidation |
+| POST | `/scheduled/learning/*` | Trigger learning algorithms |
 
 ---
 
@@ -213,6 +224,18 @@ mypy .
 
 ---
 
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache License 2.0 - see [LICENSE](LICENSE) for details.
+
+## Security
+
+To report security vulnerabilities, please see [SECURITY.md](SECURITY.md).
+
+---
+
+Made with ❤️ by [ServLabs](https://github.com/ServLabs)

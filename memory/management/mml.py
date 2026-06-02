@@ -155,7 +155,7 @@ class MemoryManagementLayer:
         )
         
         # Record metrics
-        from analytics import record_latency, record_count
+        from observability import record_latency, record_count
         await record_latency("mml", "recall", result.search_time_ms)
         await record_count("mml", "recall_results", len(result.items))
         
@@ -314,7 +314,7 @@ class MemoryManagementLayer:
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         
         # Log to analytics
-        from analytics import record_metric
+        from observability import record_metric
         await record_metric("mml", "consolidation_duration_ms", result.duration_ms)
         await record_metric("mml", "consolidation_entities", result.entities_extracted)
         
