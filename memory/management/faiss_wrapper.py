@@ -8,9 +8,43 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from core import audit
-from core import log
+from observability import audit
+from logger import log
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Factory
+# ══════════════════════════════════════════════════════════════════════════════
+
+_faiss_stores: dict[str, "AuditedFAISSIndex"] = {}
+
+
+def get_faiss_store(memory_type: str) -> "AuditedFAISSIndex":
+    """
+    Get the FAISS index for a memory type.
+
+    Args:
+        memory_type: One of "sfm", "lfm", "am", "mm", "meta".
+
+    Returns:
+        AuditedFAISSIndex for the given type.
+    """
+    if memory_type not in _faiss_stores:
+        from config import config as cfg
+
+        dimension = cfg.embedding.embedding_dim
+        index_path = cfg.paths.faiss_dir / f"{memory_type}.index"
+        _faiss_stores[memory_type] = AuditedFAISSIndex(
+            name=memory_type,
+            dimension=dimension,
+            index_path=index_path,
+        )
+    return _faiss_stores[memory_type]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AuditedFAISSIndex
+# ══════════════════════════════════════════════════════════════════════════════
 
 class AuditedFAISSIndex:
     """

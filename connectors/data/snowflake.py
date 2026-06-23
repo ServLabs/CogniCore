@@ -7,7 +7,7 @@ Async Snowflake connector. Wraps sync driver with asyncio.to_thread().
 import asyncio
 from typing import Any, Optional
 
-from core import config
+from config import config
 from connectors.base import BaseDataConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 
@@ -102,6 +102,10 @@ class SnowflakeConnector(BaseDataConnector):
         """Get schema information."""
         def _get():
             if table:
+                # Sanitize: only allow alphanumeric, underscore, dot (schema.table)
+                import re
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_.]*$', table):
+                    raise ValueError(f"Invalid table name: {table}")
                 rows = self._conn.cursor().execute(f"DESCRIBE TABLE {table}").fetchall()
                 return {
                     "table": table,
@@ -111,6 +115,52 @@ class SnowflakeConnector(BaseDataConnector):
             return {"tables": [r[1] for r in rows]}
         
         return await asyncio.to_thread(_get)
+    
+    def tool_schema(self) -> dict[str, Any]:
+        """Expose Snowflake as a tool."""
+        sf = config.snowflake
+        return {
+            "name": "query_snowflake",
+            "description": (
+                f"Execute read-only SQL queries against Snowflake "
+                f"(database: {sf.database}, warehouse: {sf.warehouse}). "
+                "Use for querying structured data, getting schema info, or exploring tables."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["query", "schema"],
+                        "description": "'query' to run SQL, 'schema' to get table/column info.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "SQL query (for action='query').",
+                    },
+                    "table": {
+                        "type": "string",
+                        "description": "Table name (for action='schema'). Omit to list all tables.",
+                    },
+                },
+                "required": ["action"],
+            },
+        }
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute Snowflake operation via tool interface."""
+        try:
+            match params["action"]:
+                case "query":
+                    rows = await self.execute_query(params["query"])
+                    return {"result": rows}
+                case "schema":
+                    schema = await self.get_schema(params.get("table"))
+                    return {"result": schema}
+                case _:
+                    return {"error": f"Unknown action: {params['action']}"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def info(self) -> ConnectorInfo:
         """Return connector info."""

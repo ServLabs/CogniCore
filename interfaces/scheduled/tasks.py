@@ -9,8 +9,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from core import log
-from core import audit
+from logger import log
+from observability import audit
+from memory import (
+    get_mml,
+    get_generalizer,
+    get_abstraction_learner,
+    get_analogical_learner,
+    get_transfer_learner,
+    get_contrastive_learner,
+    get_meta_learner,
+)
 
 
 @dataclass
@@ -51,8 +60,8 @@ TASKS = {
     "learning/contrastive": "memory.management.learning.contrastive:generate",
     
     # Maintenance Tasks
-    "maintenance/backup": "migrations:backup",
-    "maintenance/vacuum": "migrations:vacuum",
+    "maintenance/backup": "memory.management.mml:backup_databases",
+    "maintenance/vacuum": "memory.management.mml:vacuum_databases",
 }
 
 
@@ -115,7 +124,7 @@ async def _execute_task(task_name: str, params: dict) -> dict[str, Any]:
     # Handle "all" task
     if task_name == "all":
         results = {}
-        for name in ["consolidation", "cleanup", "reindex"]:
+        for name in ["consolidation", "cleanup", "reindex", "integrity"]:
             try:
                 result = await _execute_task(name, params)
                 results[name] = {"status": "completed", "result": result}
@@ -125,34 +134,41 @@ async def _execute_task(task_name: str, params: dict) -> dict[str, Any]:
     
     # MML tasks
     if task_name == "consolidation":
-        # Would call MML consolidation
-        return {"consolidated": 0}
+        mml = get_mml()
+        result = await mml.consolidate()
+        return result
     
     elif task_name == "cleanup":
-        # Would call MML cleanup
-        return {"removed": 0}
+        mml = get_mml()
+        result = await mml.forget_stale()
+        return result
     
     elif task_name == "reindex":
-        # Would rebuild FAISS indexes
-        return {"indexes_rebuilt": 0}
+        mml = get_mml()
+        result = await mml.optimize_indexes()
+        return result
     
     elif task_name == "integrity":
-        # Would check data integrity
-        return {"issues": 0}
+        mml = get_mml()
+        result = await mml.check_integrity()
+        return result
     
     elif task_name == "promote":
-        # Would promote facts from WM to SFM
-        return {"promoted": 0}
+        mml = get_mml()
+        result = await mml.promote_to_sfm()
+        return result
+    
+    # Maintenance tasks
+    elif task_name == "maintenance/backup":
+        return await _run_maintenance_backup()
+    
+    elif task_name == "maintenance/vacuum":
+        return await _run_maintenance_vacuum()
     
     # Learning tasks
     elif task_name.startswith("learning/"):
         learning_type = task_name.split("/")[1]
         return await _run_learning_task(learning_type, params)
-    
-    # Maintenance tasks
-    elif task_name.startswith("maintenance/"):
-        maintenance_type = task_name.split("/")[1]
-        return await _run_maintenance_task(maintenance_type, params)
     
     else:
         raise ValueError(f"Unknown task: {task_name}")
@@ -162,46 +178,78 @@ async def _run_learning_task(learning_type: str, params: dict) -> dict[str, Any]
     """Run a learning task."""
     
     if learning_type == "generalization":
-        from memory.management.learning import get_generalizer
         generalizer = get_generalizer()
-        # Would run generalization
-        return {"procedures_created": 0}
+        result = await generalizer.run()
+        return result
     
     elif learning_type == "abstraction":
-        from memory.management.learning import get_abstraction_learner
         learner = get_abstraction_learner()
-        # Would run abstraction
-        return {"abstractions_created": 0}
+        result = await learner.run()
+        return result
+    
+    elif learning_type == "analogical":
+        learner = get_analogical_learner()
+        result = await learner.run()
+        return result
+    
+    elif learning_type == "transfer":
+        learner = get_transfer_learner()
+        result = await learner.run()
+        return result
     
     elif learning_type == "meta":
-        from memory.management.learning import get_meta_learner
         learner = get_meta_learner()
-        result = learner.analyze()
-        return result.to_dict()
+        result = await learner.analyze()
+        return result.to_dict() if hasattr(result, 'to_dict') else result
     
     elif learning_type == "contrastive":
-        from memory.management.learning import get_contrastive_learner
         learner = get_contrastive_learner()
-        # Would generate contrastive pairs
-        return {"pairs_created": 0}
+        result = await learner.generate()
+        return result
     
     else:
         return {"learning_type": learning_type, "status": "not_implemented"}
 
 
-async def _run_maintenance_task(maintenance_type: str, params: dict) -> dict[str, Any]:
-    """Run a maintenance task."""
+async def _run_maintenance_backup() -> dict[str, Any]:
+    """Backup SQLite databases to timestamped copies."""
+    import asyncio
+    import shutil
+    from config import config
     
-    if maintenance_type == "backup":
-        # Would run backup
-        return {"backup_created": True}
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_dir = config.paths.data_dir / "backups" / timestamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
     
-    elif maintenance_type == "vacuum":
-        # Would vacuum databases
-        return {"vacuumed": True}
+    backed_up = []
+    for db_path in [config.paths.hot_db, config.paths.cold_db]:
+        if db_path.exists():
+            dest = backup_dir / db_path.name
+            await asyncio.to_thread(shutil.copy2, str(db_path), str(dest))
+            backed_up.append(str(dest))
     
-    else:
-        return {"maintenance_type": maintenance_type, "status": "not_implemented"}
+    return {"backup_dir": str(backup_dir), "files": backed_up}
+
+
+async def _run_maintenance_vacuum() -> dict[str, Any]:
+    """VACUUM SQLite databases to reclaim space."""
+    import asyncio
+    import sqlite3
+    from config import config
+    
+    results = {}
+    for name, db_path in [("hot", config.paths.hot_db), ("cold", config.paths.cold_db)]:
+        if db_path.exists():
+            def _vacuum(path=db_path):
+                conn = sqlite3.connect(str(path))
+                conn.execute("VACUUM")
+                conn.close()
+            await asyncio.to_thread(_vacuum)
+            results[name] = "vacuumed"
+        else:
+            results[name] = "not_found"
+    
+    return results
 
 
 def get_task_status(task_id: str) -> Optional[TaskExecution]:

@@ -6,7 +6,7 @@ Verify SFM facts against ground truth or source documents.
 
 from typing import Any, Optional
 
-from evals.runner import EvalResult
+from observability.evals.runner import EvalResult
 
 
 async def eval_fact_accuracy(

@@ -1,9 +1,11 @@
 """
 File Connector
 
-Read local files: CSV, JSON, JSONL, Markdown, plain text.
+Async file I/O: CSV, JSON, JSONL, Markdown, plain text.
+All I/O is offloaded to threads via asyncio.to_thread.
 """
 
+import asyncio
 import csv
 import json
 from pathlib import Path
@@ -14,158 +16,108 @@ from connectors.base import BaseConnector, ConnectorInfo, ConnectorStatus, Conne
 
 class FileConnector(BaseConnector):
     """
-    Local file connector.
+    Local file connector — async-native.
     
     Provides:
     - Read CSV, JSON, JSONL, Markdown, plain text
-    - Write JSONL (append mode)
+    - Write JSON, JSONL, text (append mode for JSONL)
     - Path resolution with optional base directory
+    
+    All I/O is async via asyncio.to_thread.
     """
     
     def __init__(self, base_dir: Optional[Union[str, Path]] = None):
-        """
-        Initialize file connector.
-        
-        Args:
-            base_dir: Base directory for relative paths.
-        """
         self.base_dir = Path(base_dir) if base_dir else None
     
     async def connect(self) -> None:
-        """No connection needed for local files."""
-        pass
+        """Ensure base directory exists."""
+        if self.base_dir:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
     
     async def disconnect(self) -> None:
-        """No disconnection needed for local files."""
         pass
     
     async def health_check(self) -> bool:
-        """Check if base directory exists (if configured)."""
         return self.base_dir is None or self.base_dir.exists()
     
-    def read_csv(self, path: Union[str, Path]) -> list[dict[str, Any]]:
-        """
-        Read CSV file.
-        
-        Args:
-            path: File path.
-            
-        Returns:
-            List of row dicts.
-        """
-        with open(self._resolve(path), newline="") as f:
-            return list(csv.DictReader(f))
+    async def read_csv(self, path: Union[str, Path]) -> list[dict[str, Any]]:
+        """Read CSV file and return list of row dicts."""
+        def _read():
+            with open(self._resolve(path), newline="") as f:
+                return list(csv.DictReader(f))
+        return await asyncio.to_thread(_read)
     
-    def read_json(self, path: Union[str, Path]) -> Union[dict, list]:
-        """
-        Read JSON file.
-        
-        Args:
-            path: File path.
-            
-        Returns:
-            Parsed JSON (dict or list).
-        """
-        with open(self._resolve(path)) as f:
-            return json.load(f)
+    async def read_json(self, path: Union[str, Path]) -> Union[dict, list]:
+        """Read JSON file."""
+        def _read():
+            with open(self._resolve(path)) as f:
+                return json.load(f)
+        return await asyncio.to_thread(_read)
     
-    def read_jsonl(self, path: Union[str, Path]) -> list[dict[str, Any]]:
-        """
-        Read JSONL file (one JSON object per line).
-        
-        Args:
-            path: File path.
-            
-        Returns:
-            List of parsed objects.
-        """
-        with open(self._resolve(path)) as f:
-            return [json.loads(line) for line in f if line.strip()]
+    async def read_jsonl(self, path: Union[str, Path]) -> list[dict[str, Any]]:
+        """Read JSONL file (one JSON object per line)."""
+        def _read():
+            with open(self._resolve(path)) as f:
+                return [json.loads(line) for line in f if line.strip()]
+        return await asyncio.to_thread(_read)
     
-    def read_text(self, path: Union[str, Path]) -> str:
-        """
-        Read plain text file.
-        
-        Args:
-            path: File path.
-            
-        Returns:
-            File contents.
-        """
-        with open(self._resolve(path)) as f:
-            return f.read()
+    async def read_text(self, path: Union[str, Path]) -> str:
+        """Read plain text or markdown file."""
+        def _read():
+            with open(self._resolve(path)) as f:
+                return f.read()
+        return await asyncio.to_thread(_read)
     
-    def read_markdown(self, path: Union[str, Path]) -> str:
-        """
-        Read Markdown file.
-        
-        Args:
-            path: File path.
-            
-        Returns:
-            File contents.
-        """
-        return self.read_text(path)
+    async def read_markdown(self, path: Union[str, Path]) -> str:
+        """Read Markdown file."""
+        return await self.read_text(path)
     
-    def write_json(
+    async def write_json(
         self,
         path: Union[str, Path],
         data: Union[dict, list],
         indent: int = 2,
     ) -> None:
-        """
-        Write JSON file.
-        
-        Args:
-            path: File path.
-            data: Data to write.
-            indent: JSON indentation.
-        """
-        p = self._resolve(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w") as f:
-            json.dump(data, f, indent=indent, default=str)
+        """Write JSON file."""
+        def _write():
+            p = self._resolve(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w") as f:
+                json.dump(data, f, indent=indent, default=str)
+        await asyncio.to_thread(_write)
     
-    def write_jsonl(
+    async def write_jsonl(
         self,
         path: Union[str, Path],
         records: list[dict[str, Any]],
     ) -> None:
-        """
-        Append records to JSONL file.
-        
-        Args:
-            path: File path.
-            records: Records to append.
-        """
-        p = self._resolve(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a") as f:
-            for record in records:
-                f.write(json.dumps(record, default=str) + "\n")
+        """Append records to JSONL file."""
+        def _write():
+            p = self._resolve(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "a") as f:
+                for record in records:
+                    f.write(json.dumps(record, default=str) + "\n")
+        await asyncio.to_thread(_write)
     
-    def write_text(
+    async def write_text(
         self,
         path: Union[str, Path],
         content: str,
     ) -> None:
-        """
-        Write plain text file.
-        
-        Args:
-            path: File path.
-            content: Content to write.
-        """
-        p = self._resolve(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w") as f:
-            f.write(content)
+        """Write plain text file."""
+        def _write():
+            p = self._resolve(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w") as f:
+                f.write(content)
+        await asyncio.to_thread(_write)
     
-    def exists(self, path: Union[str, Path]) -> bool:
+    async def exists(self, path: Union[str, Path]) -> bool:
         """Check if file exists."""
         return self._resolve(path).exists()
     
-    def list_dir(self, path: Union[str, Path]) -> list[str]:
+    async def list_dir(self, path: Union[str, Path]) -> list[str]:
         """List directory contents."""
         p = self._resolve(path)
         return [f.name for f in p.iterdir()] if p.is_dir() else []
@@ -179,8 +131,74 @@ class FileConnector(BaseConnector):
             return self.base_dir / p
         return p
     
+    def tool_schema(self) -> dict[str, Any]:
+        """Expose file connector as a tool."""
+        return {
+            "name": "file_io",
+            "description": (
+                "Read or write local data files. Supports CSV, JSON, JSONL, "
+                "Markdown, and plain text. Use for loading data, saving results, "
+                "or checking file contents."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["read_csv", "read_json", "read_jsonl", "read_text", "write_json", "write_text", "list_dir", "exists"],
+                        "description": "File operation to perform.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory path (relative to data directory).",
+                    },
+                    "data": {
+                        "description": "Data to write (for write actions).",
+                    },
+                },
+                "required": ["action", "path"],
+            },
+        }
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute file operation via tool interface."""
+        action = params["action"]
+        path = params["path"]
+        
+        try:
+            match action:
+                case "read_csv":
+                    result = await self.read_csv(path)
+                    return {"result": result}
+                case "read_json":
+                    result = await self.read_json(path)
+                    return {"result": result}
+                case "read_jsonl":
+                    result = await self.read_jsonl(path)
+                    return {"result": result}
+                case "read_text":
+                    result = await self.read_text(path)
+                    return {"result": result}
+                case "write_json":
+                    await self.write_json(path, params.get("data", {}))
+                    return {"result": f"Written to {path}"}
+                case "write_text":
+                    await self.write_text(path, params.get("data", ""))
+                    return {"result": f"Written to {path}"}
+                case "list_dir":
+                    result = await self.list_dir(path)
+                    return {"result": result}
+                case "exists":
+                    result = await self.exists(path)
+                    return {"result": result}
+                case _:
+                    return {"error": f"Unknown action: {action}"}
+        except FileNotFoundError:
+            return {"error": f"File not found: {path}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
     def info(self) -> ConnectorInfo:
-        """Return connector info."""
         return ConnectorInfo(
             name="file",
             connector_type=ConnectorType.DATA,

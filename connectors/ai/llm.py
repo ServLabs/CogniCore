@@ -7,7 +7,7 @@ Provider-agnostic — swapping is a config change, not a code change.
 
 from typing import Any, Optional
 
-from core import config
+from config import config
 from connectors.base import BaseConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 
@@ -94,11 +94,6 @@ class LLMConnector(BaseConnector):
         max_tokens = max_tokens or config.llm.max_tokens
         temperature = temperature if temperature is not None else config.llm.temperature
         
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        
         if config.llm.provider == "anthropic":
             resp = await self._client.messages.create(
                 model=model,
@@ -110,6 +105,11 @@ class LLMConnector(BaseConnector):
             return resp.content[0].text
         else:
             # OpenAI / local (OpenAI-compatible)
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            
             resp = await self._client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -190,6 +190,55 @@ class LLMConnector(BaseConnector):
                 temperature=temperature,
             )
             return resp.choices[0].message.content
+    
+    def tool_schema(self) -> dict[str, Any]:
+        """Expose LLM as a tool for text generation/analysis."""
+        return {
+            "name": "generate_text",
+            "description": (
+                "Generate, summarize, analyze, or transform text using an LLM. "
+                "Use when you need to: summarize long content, extract information, "
+                "rewrite text, generate reports, or perform text analysis tasks "
+                "that require language understanding."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The prompt/instruction for text generation.",
+                    },
+                    "system": {
+                        "type": "string",
+                        "description": "System prompt to set behavior context.",
+                    },
+                    "model_tier": {
+                        "type": "string",
+                        "enum": ["cheap", "default"],
+                        "description": "Model tier: 'cheap' for simple tasks, 'default' for complex.",
+                    },
+                },
+                "required": ["prompt"],
+            },
+        }
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute LLM generation via tool interface."""
+        try:
+            tier = params.get("model_tier", "default")
+            if tier == "cheap":
+                result = await self.generate_cheap(
+                    params["prompt"],
+                    system=params.get("system"),
+                )
+            else:
+                result = await self.generate(
+                    params["prompt"],
+                    system=params.get("system"),
+                )
+            return {"result": result}
+        except Exception as e:
+            return {"error": str(e)}
     
     def info(self) -> ConnectorInfo:
         """Return connector info."""

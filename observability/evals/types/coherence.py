@@ -7,8 +7,8 @@ Uses NLI to detect contradicting statements.
 
 from typing import Any, Optional
 
-from evals.runner import EvalResult
-from evals.metrics import coherence_score
+from observability.evals.runner import EvalResult
+from observability.evals.metrics import coherence_score
 
 
 async def eval_coherence(

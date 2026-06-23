@@ -13,9 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-import numpy as np
-
-from core import config
+from config import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -235,6 +233,12 @@ class RecallEngine:
         
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         
+        # Record recall latency to DuckDB
+        from observability.analytics.analytics import record_latency, record_count
+        import asyncio
+        asyncio.create_task(record_latency("recall", "search", elapsed_ms, sources=",".join(sources_searched)))
+        asyncio.create_task(record_count("recall", "result_count", count=len(diverse_items)))
+        
         return RecallResult(
             items=diverse_items,
             query=query,
@@ -443,25 +447,68 @@ class RecallEngine:
             return items
         
         if not self.embedder:
-            # No embeddings - just return top k
             return items[:top_k]
         
-        # For now, simple diversity by source
-        # TODO: Implement full MMR with embeddings
-        selected: list[RecallItem] = []
-        source_counts: dict[str, int] = {}
-        max_per_source = max(2, top_k // 3)
+        # Collect embeddings for items that have them
+        embeddings: dict[int, Any] = {}
+        for i, item in enumerate(items):
+            if hasattr(item, "embedding") and item.embedding is not None:
+                embeddings[i] = item.embedding
         
-        for item in items:
-            source = item.source
-            if source_counts.get(source, 0) < max_per_source:
-                selected.append(item)
-                source_counts[source] = source_counts.get(source, 0) + 1
+        # Fallback to source-diversity if no embeddings available
+        if not embeddings:
+            return items[:top_k]
+        
+        # Full MMR: λ * sim(q, d) - (1-λ) * max(sim(d, d'))
+        lambda_param = 0.7
+        selected: list[RecallItem] = []
+        selected_indices: list[int] = []
+        candidates = list(range(len(items)))
+        
+        while len(selected) < top_k and candidates:
+            best_idx = -1
+            best_score = float("-inf")
             
-            if len(selected) >= top_k:
+            for idx in candidates:
+                relevance = items[idx].score
+                
+                # Max similarity to already-selected items
+                max_sim = 0.0
+                if selected_indices and idx in embeddings:
+                    for sel_idx in selected_indices:
+                        if sel_idx in embeddings:
+                            sim = self._cosine_similarity(
+                                embeddings[idx], embeddings[sel_idx]
+                            )
+                            max_sim = max(max_sim, sim)
+                
+                mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim
+                
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = idx
+            
+            if best_idx < 0:
                 break
+            
+            selected.append(items[best_idx])
+            selected_indices.append(best_idx)
+            candidates.remove(best_idx)
         
         return selected
+    
+    @staticmethod
+    def _cosine_similarity(a: Any, b: Any) -> float:
+        """Compute cosine similarity between two numpy vectors."""
+        import numpy as np
+        
+        a = np.asarray(a, dtype=np.float32).ravel()
+        b = np.asarray(b, dtype=np.float32).ravel()
+        dot = np.dot(a, b)
+        norm = np.linalg.norm(a) * np.linalg.norm(b)
+        if norm == 0:
+            return 0.0
+        return float(dot / norm)
     
     def _recency_score(self, last_accessed: Optional[datetime]) -> float:
         """Calculate recency score (0-1) based on last access time."""

@@ -7,7 +7,7 @@ Async Azure SQL connector. Wraps sync pyodbc driver with asyncio.to_thread().
 import asyncio
 from typing import Any, Optional
 
-from core import config
+from config import config
 from connectors.base import BaseDataConnector, ConnectorInfo, ConnectorStatus, ConnectorType
 
 
@@ -120,6 +120,52 @@ class AzureSQLConnector(BaseDataConnector):
             return {"tables": [r[0] for r in cur.fetchall()]}
         
         return await asyncio.to_thread(_get)
+    
+    def tool_schema(self) -> dict[str, Any]:
+        """Expose Azure SQL as a tool."""
+        az = config.azure_sql
+        return {
+            "name": "query_azure_sql",
+            "description": (
+                f"Execute read-only SQL queries against Azure SQL "
+                f"(database: {az.database}). "
+                "Use for querying structured data, getting schema info, or exploring tables."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["query", "schema"],
+                        "description": "'query' to run SQL, 'schema' to get table/column info.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "SQL query (for action='query').",
+                    },
+                    "table": {
+                        "type": "string",
+                        "description": "Table name (for action='schema'). Omit to list all tables.",
+                    },
+                },
+                "required": ["action"],
+            },
+        }
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute Azure SQL operation via tool interface."""
+        try:
+            match params["action"]:
+                case "query":
+                    rows = await self.execute_query(params["query"])
+                    return {"result": rows}
+                case "schema":
+                    schema = await self.get_schema(params.get("table"))
+                    return {"result": schema}
+                case _:
+                    return {"error": f"Unknown action: {params['action']}"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def info(self) -> ConnectorInfo:
         """Return connector info."""

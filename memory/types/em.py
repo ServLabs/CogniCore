@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from core import config
+from config import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -354,7 +354,7 @@ class EmotionalMemory:
         self,
         user_id: str,
         convo_id: str,
-        sentiment: Sentiment,
+        sentiment: str,
         confidence: float,
         trigger: str,
         context_snippet: str = "",
@@ -529,7 +529,7 @@ class EmotionalMemory:
                         id=data["id"],
                         user_id=data["user_id"],
                         convo_id=data["convo_id"],
-                        sentiment=Sentiment(data["sentiment"]),
+                        sentiment=data["sentiment"],
                         confidence=data["confidence"],
                         trigger=data["trigger"] or "",
                         context_snippet=data["context_snippet"] or "",
@@ -594,7 +594,7 @@ def get_emotional_memory() -> EmotionalMemory:
 async def record_sentiment(
     user_id: str,
     convo_id: str,
-    sentiment: Sentiment,
+    sentiment: str,
     confidence: float,
     trigger: str,
     context_snippet: str = "",

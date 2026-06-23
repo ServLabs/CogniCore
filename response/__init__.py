@@ -2,64 +2,36 @@
 Response Layer
 
 The agent's processing pipeline — receives user input, routes it,
-reasons over it, executes skills, and produces a response.
+reasons over it, executes tasks via sub-agents, and produces a response.
 
-This package provides:
-- Gate: Fast filter for trivial interactions
-- Deep Pipeline: Full reasoning for complex queries
-- Thinking: Query decomposition and planning
-- Decision: Execution strategy selection
-- Skills: Script execution and DB queries
-- Synthesis: Response generation
+Internal modules (not re-exported):
+- gate.py        — AI-powered trivial message filter (greetings, chitchat)
+- thinking.py    — Query decomposition and planning via AI
+- decision.py    — AI-powered strategy selection (direct | clarify | execute | tool_use)
+- sub_agents.py  — Autonomous task executors + ReAct tool-use agent
+- synthesis.py   — AI-powered response composition
+- channel.py     — Two-way communication protocol (clarification support)
+
+pipeline.py orchestrates the above:
+  Gate → [Think ‖ Recall] → Decision → (Clarify | Execute | ToolUse | Direct) → Synthesis
+
+Downstream dependencies (what response/ calls):
+- core.config                          — pipeline settings
+- connectors.internal.genai             — AI calls (internal brain)
+- connectors.registry                  — tool discovery and execution
+- memory.management.recall             — context retrieval
+- observability.record_latency/count   — pipeline metrics
+- prompts (prompts/response/)          — all AI prompts
 """
 
-from response.gate import (
-    Gate,
-    GateResult,
-    get_gate,
-)
-from response.pipeline import (
-    DeepPipeline,
-    PipelineResult,
-    get_pipeline,
-    process_message,
-)
-from response.thinking import (
-    ThoughtPlan,
-    Thinker,
-    get_thinker,
-)
-from response.decision import (
-    ExecutionPlan,
-    SkillCall,
-    DecisionMaker,
-    get_decision_maker,
-)
-from response.synthesis import (
-    Synthesizer,
-    get_synthesizer,
-)
+from response.pipeline import get_pipeline
+from response.sub_agents import execute_with_tools
+from response.channel import PipelineChannel, StreamChannel, NullChannel
 
 __all__ = [
-    # Gate
-    "Gate",
-    "GateResult",
-    "get_gate",
-    # Pipeline
-    "DeepPipeline",
-    "PipelineResult",
     "get_pipeline",
-    "process_message",
-    # Thinking
-    "ThoughtPlan",
-    "Thinker",
-    "get_thinker",
-    # Decision
-    "ExecutionPlan",
-    "SkillCall",
-    "DecisionMaker",
-    "get_decision_maker",
-    # Synthesis
-    "Synthesizer",
-    "get_synthesizer",
+    "execute_with_tools",
+    "PipelineChannel",
+    "StreamChannel",
+    "NullChannel",
 ]

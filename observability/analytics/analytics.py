@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 from collections.abc import Callable
 
-from core import config
+from config import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -53,7 +53,7 @@ EVAL_TYPES = frozenset({
 # Buffer settings
 DEFAULT_BUFFER_SIZE = 100  # Flush after N events
 DEFAULT_FLUSH_INTERVAL = 5.0  # Flush every N seconds
-CACHE_TTL_SECONDS = 300  # 5 minute cache for reads
+REDIS_CACHE_TTL_SECONDS = 60  # 1 minute TTL for Redis-cached query results
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -100,11 +100,11 @@ class EvalEvent:
 
 @dataclass
 class CachedResult:
-    """Cached query result."""
+    """Cached query result (used as local fallback if Redis unavailable)."""
     data: Any
     cached_at: datetime
     
-    def is_valid(self, ttl_seconds: int = CACHE_TTL_SECONDS) -> bool:
+    def is_valid(self, ttl_seconds: int = REDIS_CACHE_TTL_SECONDS) -> bool:
         """Check if cache is still valid."""
         age = (datetime.now(timezone.utc) - self.cached_at).total_seconds()
         return age < ttl_seconds
@@ -152,7 +152,11 @@ class Analytics:
         self._eval_buffer: list[EvalEvent] = []
         self._buffer_lock = threading.Lock()
         
-        # Cache
+        # Redis cache (DB 2 = cache)
+        self._redis = None
+        self._redis_available = False
+        
+        # Local fallback cache (used when Redis is down)
         self._query_cache: dict[str, CachedResult] = {}
         self._cache_lock = threading.Lock()
         
@@ -165,7 +169,7 @@ class Analytics:
     # ── Initialization ──
     
     async def _init(self) -> None:
-        """Initialize DuckDB tables."""
+        """Initialize DuckDB tables and Redis cache connection."""
         if self._initialized:
             return
         
@@ -213,6 +217,16 @@ class Analytics:
             
         finally:
             conn.close()
+        
+        # Connect to Redis DB for caching
+        try:
+            import redis.asyncio as aioredis
+            self._redis = aioredis.from_url(config.redis.url(config.redis.db_cache))
+            await self._redis.ping()
+            self._redis_available = True
+        except Exception:
+            self._redis = None
+            self._redis_available = False
         
         self._initialized = True
     
@@ -356,7 +370,8 @@ class Analytics:
         """
         Execute a SQL query on metrics.
         
-        Results are cached for 5 minutes by default.
+        Results are cached in Redis (60s TTL) to reduce DuckDB read load.
+        Falls back to in-memory cache if Redis is unavailable.
         
         Args:
             sql: SQL query string.
@@ -367,14 +382,25 @@ class Analytics:
         """
         await self._init()
         
-        # Check cache
-        cache_key = sql
+        import hashlib
+        cache_key = f"analytics:q:{hashlib.sha256(sql.encode()).hexdigest()[:16]}"
+        
+        # Check Redis cache first
+        if use_cache and self._redis_available:
+            try:
+                cached = await self._redis.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception:
+                pass
+        
+        # Fallback: check local cache
         if use_cache:
             with self._cache_lock:
                 if cache_key in self._query_cache:
-                    cached = self._query_cache[cache_key]
-                    if cached.is_valid():
-                        return cached.data
+                    local_cached = self._query_cache[cache_key]
+                    if local_cached.is_valid():
+                        return local_cached.data
         
         import duckdb
         
@@ -386,7 +412,18 @@ class Analytics:
         finally:
             conn.close()
         
-        # Cache result
+        # Store in Redis with 60s TTL
+        if use_cache and self._redis_available:
+            try:
+                await self._redis.set(
+                    cache_key,
+                    json.dumps(rows, default=str),
+                    ex=REDIS_CACHE_TTL_SECONDS,
+                )
+            except Exception:
+                pass
+        
+        # Local fallback cache
         with self._cache_lock:
             self._query_cache[cache_key] = CachedResult(
                 data=rows,
@@ -548,10 +585,22 @@ class Analytics:
             ORDER BY day
         """)
     
-    def clear_cache(self) -> None:
-        """Clear query cache."""
+    async def clear_cache(self) -> None:
+        """Clear both Redis and local query caches."""
         with self._cache_lock:
             self._query_cache.clear()
+        if self._redis_available:
+            try:
+                # Delete all analytics query keys
+                cursor = 0
+                while True:
+                    cursor, keys = await self._redis.scan(cursor, match="analytics:q:*", count=100)
+                    if keys:
+                        await self._redis.delete(*keys)
+                    if cursor == 0:
+                        break
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════

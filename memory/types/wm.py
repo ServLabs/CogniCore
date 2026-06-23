@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from core import config
+from config import config
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -602,15 +602,27 @@ _wm_instance: Optional[WorkingMemory] = None
 
 def get_working_memory() -> WorkingMemory:
     """
-    Get the singleton WorkingMemory instance.
+    Get the singleton WorkingMemory instance with Redis on DB for WM.
     
     Returns:
         The WorkingMemory instance.
     """
     global _wm_instance
     if _wm_instance is None:
-        _wm_instance = WorkingMemory()
+        redis_client = _connect_redis_wm()
+        _wm_instance = WorkingMemory(redis_client=redis_client)
     return _wm_instance
+
+
+def _connect_redis_wm():
+    """Connect to Redis DB dedicated to Working Memory. Returns None on failure."""
+    try:
+        import redis.asyncio as aioredis
+        return aioredis.from_url(config.redis.url(config.redis.db_working_memory))
+    except Exception as e:
+        from logger import log
+        log.warning("WM: Redis unavailable (%s) — local-only mode", e)
+        return None
 
 
 # ── Convenience Functions ──
@@ -679,7 +691,7 @@ class WorkingMemoryHealthMonitor:
             True if reconnected successfully.
         """
         from logger import log
-        from core import audit
+        from observability import audit
         
         if self.wm._redis_available:
             return True
