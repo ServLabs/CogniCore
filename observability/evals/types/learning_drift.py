@@ -8,7 +8,7 @@ Compares current knowledge against baseline snapshots.
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
-from evals.runner import EvalResult
+from observability.evals.runner import EvalResult
 
 
 async def eval_learning_drift(

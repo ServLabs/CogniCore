@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
-from core import config
+from config import config
+from observability.audit import audit
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -136,10 +137,18 @@ class Governor:
         
         # Check hourly limit
         if self.usage.llm_calls_this_hour >= self.limits.max_llm_calls_per_hour:
+            audit.log_raw(
+                "control", "rate_limit_denied", "governor", "denied",
+                details={"reason": "hourly_call_limit", "current": self.usage.llm_calls_this_hour},
+            )
             return False
         
         # Check daily cost limit
         if self.usage.llm_cost_today_usd + estimated_cost_usd > self.limits.max_llm_cost_per_day_usd:
+            audit.log_raw(
+                "control", "budget_denied", "governor", "denied",
+                details={"reason": "daily_cost_limit", "current_usd": self.usage.llm_cost_today_usd},
+            )
             return False
         
         return True

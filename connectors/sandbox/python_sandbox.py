@@ -6,12 +6,12 @@ Uses AST validation to catch dangerous patterns before execution.
 """
 
 import ast
-import subprocess
+import asyncio
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-from core import config
+from config import config
 from connectors.base import BaseSandbox, SandboxResult, ConnectorInfo, ConnectorStatus, ConnectorType
 
 
@@ -99,14 +99,14 @@ class PythonSandbox(BaseSandbox):
         
         script_path.write_text(preamble + code)
         
-        # 4. Execute in subprocess with resource limits
+        # 4. Execute in async subprocess with resource limits
         start = time.monotonic()
+        proc = None
         try:
-            result = subprocess.run(
-                ["python", str(script_path)],
-                capture_output=True,
-                text=True,
-                timeout=config.sandbox.python_timeout_seconds,
+            proc = await asyncio.create_subprocess_exec(
+                "python", str(script_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=str(self._work_dir),
                 env={
                     "PATH": "/usr/bin:/usr/local/bin",
@@ -114,17 +114,35 @@ class PythonSandbox(BaseSandbox):
                 },
             )
             
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=config.sandbox.python_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                elapsed_ms = (time.monotonic() - start) * 1000
+                return SandboxResult(
+                    success=False,
+                    output="",
+                    error=f"Execution timed out after {config.sandbox.python_timeout_seconds}s",
+                    execution_time_ms=elapsed_ms,
+                    truncated=False,
+                )
+            
             elapsed_ms = (time.monotonic() - start) * 1000
+            output = stdout_bytes.decode("utf-8", errors="replace")
+            stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             
             # Truncate output if needed
-            output = result.stdout
             truncated = False
             max_output = config.sandbox.max_output_bytes
             if len(output) > max_output:
                 output = output[:max_output] + "\n... (truncated)"
                 truncated = True
             
-            if result.returncode == 0:
+            if proc.returncode == 0:
                 return SandboxResult(
                     success=True,
                     output=output,
@@ -136,20 +154,10 @@ class PythonSandbox(BaseSandbox):
                 return SandboxResult(
                     success=False,
                     output=output,
-                    error=result.stderr[:max_output] if result.stderr else "Unknown error",
+                    error=stderr_text[:max_output] if stderr_text else "Unknown error",
                     execution_time_ms=elapsed_ms,
                     truncated=truncated,
                 )
-        
-        except subprocess.TimeoutExpired:
-            elapsed_ms = (time.monotonic() - start) * 1000
-            return SandboxResult(
-                success=False,
-                output="",
-                error=f"Execution timed out after {config.sandbox.python_timeout_seconds}s",
-                execution_time_ms=elapsed_ms,
-                truncated=False,
-            )
         
         except Exception as e:
             elapsed_ms = (time.monotonic() - start) * 1000
@@ -204,6 +212,43 @@ class PythonSandbox(BaseSandbox):
                         return f"Blocked call: {node.func.id}"
         
         return None
+    
+    def tool_schema(self) -> dict[str, Any]:
+        """Expose Python sandbox as a tool."""
+        return {
+            "name": "run_python",
+            "description": (
+                "Execute Python code for computation, data analysis, or calculations. "
+                "Has access to: pandas, numpy, json, datetime, math, collections, "
+                "itertools, functools, re, csv, decimal, statistics. "
+                "Cannot access network, filesystem, or system resources. "
+                "Print output to return results."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute. Use print() to output results.",
+                    },
+                    "context": {
+                        "type": "object",
+                        "description": "Variables to inject into the execution context.",
+                    },
+                },
+                "required": ["code"],
+            },
+        }
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute Python code via tool interface."""
+        result = await self.execute(
+            code=params["code"],
+            context=params.get("context"),
+        )
+        if result.success:
+            return {"result": result.output, "execution_time_ms": result.execution_time_ms}
+        return {"error": result.error, "execution_time_ms": result.execution_time_ms}
     
     def info(self) -> ConnectorInfo:
         """Return connector info."""

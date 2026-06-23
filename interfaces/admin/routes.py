@@ -4,14 +4,24 @@ Admin Routes
 REST endpoints for system administration.
 """
 
+import json
+import os
+import time as _time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core import config, log
-from core import audit
+from config import config
+from logger import log
+from observability import audit, get_analytics
+from connectors import get_registry
+from interfaces.scheduled import trigger_task
+from prompts import prompts
+
+_boot_time = _time.monotonic()
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -67,7 +77,6 @@ async def health_check():
     
     # Check connectors
     try:
-        from connectors.registry import get_registry
         registry = get_registry()
         health = await registry.health_check_all()
         components["connectors"] = {
@@ -140,11 +149,26 @@ async def get_status():
     
     Returns uptime, resource usage, and task counts.
     """
+    import resource
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # macOS reports ru_maxrss in bytes, Linux in KB
+    import sys
+    memory_mb = usage.ru_maxrss / (1024 * 1024) if sys.platform == "darwin" else usage.ru_maxrss / 1024
+
+    # Get live connection count from chat app
+    try:
+        from interfaces.chat.app import get_chat_app
+        chat_app = get_chat_app()
+        manager = chat_app.state.manager if hasattr(chat_app.state, "manager") else None
+        active = len(manager._sessions) if manager else 0
+    except Exception:
+        active = 0
+
     return SystemStatus(
-        uptime_seconds=0.0,
-        memory_usage_mb=0.0,
+        uptime_seconds=_time.monotonic() - _boot_time,
+        memory_usage_mb=memory_mb,
         cpu_percent=0.0,
-        active_connections=0,
+        active_connections=active,
         pending_tasks=0,
         last_maintenance=None,
     )
@@ -157,8 +181,6 @@ async def trigger_maintenance(request: MaintenanceRequest):
     
     Available tasks: consolidation, cleanup, reindex, all
     """
-    import time
-    
     valid_tasks = {"consolidation", "cleanup", "reindex", "all"}
     
     if request.task not in valid_tasks:
@@ -169,14 +191,12 @@ async def trigger_maintenance(request: MaintenanceRequest):
     
     audit.log_raw("interface", "maintenance", "admin", "started", target=request.task)
     
-    start = time.monotonic()
+    start = _time.monotonic()
     
     try:
-        # Delegate to scheduled interface
-        from interfaces.scheduled import trigger_task
         await trigger_task(request.task, request.params)
         
-        duration_ms = (time.monotonic() - start) * 1000
+        duration_ms = (_time.monotonic() - start) * 1000
         
         audit.log_raw(
             "interface", "maintenance", "admin", "completed",
@@ -190,7 +210,7 @@ async def trigger_maintenance(request: MaintenanceRequest):
         )
     
     except Exception as e:
-        duration_ms = (time.monotonic() - start) * 1000
+        duration_ms = (_time.monotonic() - start) * 1000
         audit.log_raw("interface", "maintenance", "admin", "failed", error=str(e))
         
         return MaintenanceResponse(
@@ -222,13 +242,14 @@ async def clear_cache(cache_type: str = "all"):
     
     if cache_type in {"prompts", "all"}:
         try:
-            from prompts import prompts
             prompts.reload()
             cleared.append("prompts")
         except Exception:
             pass
     
     if cache_type in {"memory", "all"}:
+        analytics = get_analytics()
+        analytics.clear_cache()
         cleared.append("memory")
     
     audit.log_raw("interface", "cache_clear", "admin", "completed", details={"cleared": cleared})
@@ -241,9 +262,34 @@ async def get_recent_audit(
     limit: int = 100,
     component: Optional[str] = None,
 ):
-    """Get recent audit events."""
+    """Get recent audit events from today's JSONL log."""
+    audit_dir = config.paths.audit_dir
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_file = audit_dir / f"{today}.jsonl"
+
+    if not log_file.exists():
+        return {"events": [], "limit": limit, "component": component}
+
+    events: list[dict[str, Any]] = []
+    try:
+        with open(log_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    if component and event.get("component") != component:
+                        continue
+                    events.append(event)
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        log.warning("Failed to read audit log: %s", e)
+
+    # Return most recent N events
     return {
-        "events": [],
+        "events": events[-limit:],
         "limit": limit,
         "component": component,
     }

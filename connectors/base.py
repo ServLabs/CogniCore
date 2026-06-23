@@ -51,6 +51,18 @@ class ConnectorInfo:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Exceptions
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ConnectorAuthError(Exception):
+    """Raised when a connector fails to authenticate or authorize."""
+
+    def __init__(self, connector_name: str, message: str = ""):
+        self.connector_name = connector_name
+        super().__init__(f"Auth failed for '{connector_name}': {message}" if message else f"Auth failed for '{connector_name}'")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Base Connector
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -115,6 +127,40 @@ class BaseConnector(ABC):
             True if configured.
         """
         return True
+    
+    def tool_schema(self) -> Optional[dict[str, Any]]:
+        """
+        Return OpenAI function-calling format schema if this connector is a tool.
+        
+        Override to expose this connector as an agent-usable tool.
+        Returns None by default (not a tool).
+        
+        Expected format:
+            {
+                "name": "tool_name",
+                "description": "What this tool does",
+                "parameters": {
+                    "type": "object",
+                    "properties": { ... },
+                    "required": [...]
+                }
+            }
+        """
+        return None
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """
+        Execute this connector as a tool with the given parameters.
+        
+        Override in connectors that expose tool_schema().
+        
+        Args:
+            params: Parameters matching the tool_schema definition.
+            
+        Returns:
+            Dict with at minimum {"result": ...} or {"error": ...}.
+        """
+        return {"error": f"{self.__class__.__name__} does not support tool execution"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

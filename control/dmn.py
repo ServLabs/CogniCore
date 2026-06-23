@@ -12,7 +12,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
-from core import config
+from config import config
+from logger import log
+from memory import (
+    get_meta_memory,
+    get_prospective_memory,
+    get_mml,
+    get_generalizer,
+    get_abstraction_learner,
+    get_analogical_learner,
+    get_transfer_learner,
+    get_contrastive_learner,
+    get_meta_learner,
+)
+from observability import query_metrics, record_metric
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -86,6 +99,12 @@ class DefaultModeNetwork:
         Start DMN processing.
         
         Runs until deactivated by CEN.
+        
+        Pipeline:
+        1. Self-reflection ("How did I perform?")
+        2. Spontaneous planning ("What should I prepare for?")
+        3. Learning phase (sleep-mode learners produce proposals)
+        4. Maintenance phase (curate, validate, commit, clean)
         """
         self.active = True
         self._cancel_event.clear()
@@ -101,7 +120,12 @@ class DefaultModeNetwork:
             if not self.active:
                 return
             
-            # Phase 3: Maintenance (delegate to MML)
+            # Phase 3: Learning (create proposals)
+            await self._run_learning()
+            if not self.active:
+                return
+            
+            # Phase 4: Maintenance (curate + commit)
             await self._run_maintenance()
             
         except asyncio.CancelledError:
@@ -124,8 +148,6 @@ class DefaultModeNetwork:
         
         Queries analytics for recent performance and identifies weak areas.
         """
-        from observability import query_metrics
-        
         result = ReflectionResult(timestamp=datetime.now(timezone.utc))
         weak_areas = []
         
@@ -177,7 +199,6 @@ class DefaultModeNetwork:
                 weak_areas.append("High recall miss rate (>30%) — knowledge gaps or index issues")
             
             # Check knowledge gaps
-            from memory.types.meta import get_meta_memory
             meta = get_meta_memory()
             gaps = await meta.get_top_gaps(limit=5)
             
@@ -192,7 +213,6 @@ class DefaultModeNetwork:
         self._last_reflection = result
         
         # Log reflection
-        from observability import record_metric
         await record_metric("dmn", "self_reflection", 1, result.to_dict())
         
         # Create remediation tasks for weak areas
@@ -209,8 +229,6 @@ class DefaultModeNetwork:
         """
         if not self.active:
             return PlanningResult(timestamp=datetime.now(timezone.utc))
-        
-        from observability import query_metrics
         
         result = PlanningResult(timestamp=datetime.now(timezone.utc))
         
@@ -239,44 +257,195 @@ class DefaultModeNetwork:
         self._last_planning = result
         
         # Log planning
-        from observability import record_metric
         await record_metric("dmn", "spontaneous_planning", 1, result.to_dict())
         
         return result
     
-    async def _run_maintenance(self) -> None:
+    async def _run_learning(self) -> None:
         """
-        Run maintenance tasks via MML.
+        Phase 3: Learning — sleep-mode learners produce proposals.
         
-        Prioritizes based on self-reflection results.
+        Learning creates knowledge. It does NOT write to memory directly.
+        Proposals are staged in Redis for maintenance to validate and commit.
+        
+        Sleep-mode learners: Generalization, Abstraction, Analogical,
+        Transfer, Contrastive (batch), Meta-Learning.
         """
         if not self.active:
             return
         
-        from memory.management import get_mml
         mml = get_mml()
         
-        # Prioritize based on reflection
-        priority_tasks = self._prioritize_maintenance()
-        
-        # Run MML background tasks
-        # The MML will check self._cancel_event periodically
         try:
-            # Consolidation
-            if "consolidation" in priority_tasks and self.active:
-                await mml.consolidate()
+            # Generalization: Find patterns in execution traces → procedure proposals
+            if self.active:
+                await self._run_learner("generalization", self._learn_generalization)
             
-            # SFM promotion
-            if "promotion" in priority_tasks and self.active:
-                await mml.promote_to_sfm()
+            # Abstraction: Cluster existing facts → hierarchy proposals
+            if self.active:
+                await self._run_learner("abstraction", self._learn_abstraction)
             
-            # Optimization
-            if "optimization" in priority_tasks and self.active:
-                await mml.optimize_indexes()
+            # Analogical: Cross-domain mapping → edge + fact proposals
+            if self.active:
+                await self._run_learner("analogical", self._learn_analogical)
             
-            # Integrity check
-            if "integrity" in priority_tasks and self.active:
-                await mml.check_integrity()
+            # Transfer: Adapt procedures across domains → procedure proposals
+            if self.active:
+                await self._run_learner("transfer", self._learn_transfer)
+            
+            # Contrastive: Generate negative examples → contrastive pair proposals
+            if self.active:
+                await self._run_learner("contrastive", self._learn_contrastive)
+            
+            # Meta-Learning: Analyze effectiveness, adjust budgets
+            if self.active:
+                await self._run_learner("meta", self._learn_meta)
+            
+        except asyncio.CancelledError:
+            pass
+    
+    async def _run_learner(self, name: str, func) -> None:
+        """Run a single learner with error handling."""
+        try:
+            await func()
+        except Exception as e:
+            logger.warning("dmn: learning '%s' failed: %s", name, e)
+    
+    async def _learn_generalization(self) -> None:
+        """Run generalization learner — find patterns, stage procedures."""
+        generalizer = get_generalizer()
+        mml = get_mml()
+        
+        results = await generalizer.run()
+        for proc in results:
+            await mml.stage_proposal("generalization", {
+                "type": "procedure",
+                "title": proc.title,
+                "steps": proc.steps,
+                "source_traces": proc.source_traces,
+                "confidence": proc.confidence,
+            })
+    
+    async def _learn_abstraction(self) -> None:
+        """Run abstraction learner — cluster facts into hierarchy."""
+        learner = get_abstraction_learner()
+        mml = get_mml()
+        
+        results = await learner.run()
+        for level in results:
+            await mml.stage_proposal("abstraction", {
+                "type": "hierarchy",
+                "level": level.level,
+                "label": level.label,
+                "summary": level.summary,
+                "member_ids": level.member_ids,
+            })
+    
+    async def _learn_analogical(self) -> None:
+        """Run analogical learner — cross-domain mapping."""
+        learner = get_analogical_learner()
+        mml = get_mml()
+        
+        analogies = await learner.run()
+        for analogy in analogies:
+            await mml.stage_proposal("analogical", {
+                "type": "analogy",
+                "source_domain": analogy.source_domain,
+                "target_domain": analogy.target_domain,
+                "mappings": analogy.mappings,
+                "confidence": analogy.confidence,
+            })
+    
+    async def _learn_transfer(self) -> None:
+        """Run transfer learner — adapt procedures across domains."""
+        learner = get_transfer_learner()
+        mml = get_mml()
+        
+        results = await learner.run()
+        for proc in results:
+            await mml.stage_proposal("transfer", {
+                "type": "transferred_procedure",
+                "title": proc.title,
+                "steps": proc.adapted_steps,
+                "source_domain": proc.source_domain,
+                "target_domain": proc.target_domain,
+                "concept_mappings": proc.concept_mappings,
+            })
+    
+    async def _learn_contrastive(self) -> None:
+        """Run contrastive learner — generate negative examples."""
+        learner = get_contrastive_learner()
+        mml = get_mml()
+        
+        pairs = await learner.generate_negatives()
+        for pair in pairs:
+            await mml.stage_proposal("contrastive", {
+                "type": "contrastive_pair",
+                "positive": pair.positive,
+                "negative": pair.negative,
+                "context": pair.context,
+            })
+    
+    async def _learn_meta(self) -> None:
+        """Run meta-learner — analyze effectiveness, adjust budgets."""
+        learner = get_meta_learner()
+        mml = get_mml()
+        
+        result = await learner.analyze()
+        if result.adjustments:
+            await mml.stage_proposal("meta", {
+                "type": "budget_adjustment",
+                "adjustments": result.adjustments,
+                "recommendations": result.recommendations,
+            })
+    
+    async def _run_maintenance(self) -> None:
+        """
+        Phase 4: Maintenance — curate, validate, commit, clean.
+        
+        3-stage pipeline with dependency-aware parallelism:
+        
+        Stage 1: Consolidation (commits insights + learning proposals)
+        Stage 2: [Forgetting ‖ Conflict ‖ Coherence] (parallel, independent)
+        Stage 3: [Optimization ‖ Integrity] (parallel, independent)
+        Stage 4: Linking (last — operates on final clean state)
+        """
+        if not self.active:
+            return
+        
+        mml = get_mml()
+        
+        try:
+            # Stage 1: Consolidation (must run first — commits new data)
+            if not self.active:
+                return
+            logger.debug("dmn: maintenance stage 1 — consolidation")
+            await mml.execute_task("consolidation")
+            
+            # Stage 2: Forgetting ‖ Conflict ‖ Coherence (parallel)
+            if not self.active:
+                return
+            logger.debug("dmn: maintenance stage 2 — forgetting, conflict, coherence (parallel)")
+            await asyncio.gather(
+                mml.execute_task("forgetting"),
+                mml.execute_task("conflict"),
+                mml.execute_task("coherence"),
+            )
+            
+            # Stage 3: Optimization ‖ Integrity (parallel)
+            if not self.active:
+                return
+            logger.debug("dmn: maintenance stage 3 — optimization, integrity (parallel)")
+            await asyncio.gather(
+                mml.execute_task("optimization"),
+                mml.execute_task("integrity"),
+            )
+            
+            # Stage 4: Linking (last — connect final clean state)
+            if not self.active:
+                return
+            logger.debug("dmn: maintenance stage 4 — linking")
+            await mml.execute_task("linking")
             
         except asyncio.CancelledError:
             pass
@@ -285,21 +454,34 @@ class DefaultModeNetwork:
         """
         Prioritize maintenance tasks based on reflection.
         
+        Note: With the 3-stage pipeline, this is used for logging/metrics.
+        The actual execution order is fixed by dependency chain.
+        
         Returns:
             Ordered list of task types to run.
         """
-        # Default order
-        tasks = ["consolidation", "promotion", "optimization", "integrity"]
+        # Default order (mirrors human sleep: consolidate → clean → repair → connect)
+        tasks = [
+            "consolidation",
+            "forgetting",
+            "conflict",
+            "coherence",
+            "optimization",
+            "integrity",
+            "linking",
+        ]
         
         if not self._last_reflection:
             return tasks
         
         # Boost based on weak areas
         priority_map = {
-            "recall_miss": ["optimization", "consolidation"],
-            "frustration": ["consolidation", "integrity"],
-            "knowledge_gaps": ["consolidation"],
+            "recall_miss": ["optimization", "consolidation", "linking"],
+            "frustration": ["consolidation", "conflict", "integrity"],
+            "knowledge_gaps": ["consolidation", "linking"],
             "slow": ["optimization"],
+            "integrity": ["integrity"],
+            "incoher": ["coherence"],
         }
         
         boosted = []
@@ -317,8 +499,6 @@ class DefaultModeNetwork:
     
     async def _create_remediation_task(self, weak_area: str) -> None:
         """Create a PM task to address an identified weakness."""
-        from memory.types.pm import get_prospective_memory
-        
         pm = get_prospective_memory()
         
         # Schedule for next sleep window (e.g., 2 AM)
@@ -338,8 +518,6 @@ class DefaultModeNetwork:
     
     async def _schedule_index_optimization(self, domain: str) -> None:
         """Schedule FAISS index optimization for a slow domain."""
-        from memory.types.pm import get_prospective_memory
-        
         pm = get_prospective_memory()
         
         # Schedule for next sleep window

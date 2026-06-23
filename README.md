@@ -13,9 +13,8 @@ A cognitive architecture for AI agents with human-like memory systems.
 
 ### Prerequisites
 
-- Python 3.11+
-- Redis (optional, for hot memory caching)
-- SQLite (included with Python)
+- Python 3.11+ (3.13 recommended)
+- Redis 7+ (required — Working Memory, MML staging, analytics cache)
 
 ### Installation
 
@@ -25,8 +24,8 @@ git clone https://github.com/ServLabs/CogniCore.git
 cd CogniCore
 
 # Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -34,19 +33,30 @@ pip install -r requirements.txt
 
 ### Configuration
 
-Set environment variables or use defaults:
+CogniCore uses a **3-tier environment variable system** (see [LOCAL_SETUP.md](LOCAL_SETUP.md) for full details):
 
 ```bash
-# Optional: Configure ports and paths
-export COGNICORE_WS_PORT=8765        # WebSocket server port
-export COGNICORE_REST_PORT=8080      # REST API port
-export COGNICORE_DATA_DIR=/datadrive # Data directory
-export COGNICORE_DEBUG=false         # Debug mode
+# Required: LLM credentials (Tier 3)
+export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+export AZURE_OPENAI_KEY="your-key"
+export AZURE_DEPLOYMENT_EXPENSIVE="gpt-4o"
+export AZURE_DEPLOYMENT_CHEAP="gpt-4o-mini"
+export OPENAI_API_KEY="your-openai-key"   # For embeddings
 
-# Optional: Configure LLM
-export OPENAI_API_KEY=your-key-here
-export COGNICORE_LLM_PROVIDER=openai  # or "anthropic", "local"
+# Predefined: Ports, paths, Redis (Tier 2 — usually no changes needed)
+export COGNICORE_WS_PORT=8765
+export COGNICORE_REST_PORT=8080
+export COGNICORE_DATA_DIR=./.local_data
+export REDIS_HOST=127.0.0.1
+export REDIS_PORT=6379
+
+# Redis DB isolation
+export REDIS_DB_WM=0      # Working Memory
+export REDIS_DB_MML=1     # MML staging
+export REDIS_DB_CACHE=2   # Analytics cache (60s TTL)
 ```
+
+The recommended way to start is via `./start.sh` which sets everything automatically.
 
 ### Running
 
@@ -144,22 +154,26 @@ CogniCore implements a cognitive architecture inspired by human memory systems:
 ```
 CogniCore/
 ├── run.py                # Entry point - start servers
-├── core/                 # Infrastructure (config, logger, audit, errors, migrations)
+├── config.py             # 3-tier configuration (env vars → dataclasses)
+├── start.sh              # Full startup script (env + Redis + app)
+├── Dockerfile            # Production container
 ├── interfaces/           # External APIs
 │   ├── admin/            # System administration
-│   ├── service/          # Developer APIs (ingestion, metrics, evals)
-│   ├── chat/             # WebSocket chat
+│   ├── service/          # Developer APIs (ingestion, metrics, evals, traces)
+│   ├── chat/             # WebSocket chat + streaming
 │   └── scheduled/        # Background task triggers
 ├── memory/               # 9 memory types + MML
 │   ├── types/            # ABM, WM, PM, EM, AM, MM, SFM, LFM, Meta
-│   └── management/       # MML, recall, budget, learning
-├── response/             # Gate, pipeline, thinking, decision, synthesis
+│   └── management/       # MML, recall, budget, learning, maintenance
+├── response/             # Gate, pipeline, thinking, decision, synthesis, sub-agents
 ├── control/              # Salience Network, CEN, DMN, Governor
-├── connectors/           # AI, data, sandbox connectors
-├── observability/        # Monitoring
-│   ├── analytics/        # DuckDB metrics
-│   └── evals/            # Evaluation system
-└── prompts/              # LLM prompt templates
+├── connectors/           # AI (LLM, embeddings, NLI), data, sandbox
+├── observability/        # Full telemetry stack
+│   ├── audit.py          # JSONL append-only audit logging
+│   ├── tracing.py        # Distributed tracing (traces + spans → DuckDB)
+│   ├── analytics/        # DuckDB metrics + Redis-cached reads
+│   └── evals/            # Evaluation system (5 built-in eval types)
+└── prompts/              # LLM prompt templates (Jinja2 markdown)
 ```
 
 ---
@@ -191,8 +205,20 @@ CogniCore/
 | POST | `/ingest/facts` | Ingest structured facts |
 | GET | `/metrics/summary` | System metrics summary |
 | GET | `/metrics/memory` | Memory usage stats |
+| GET | `/metrics/timeseries` | Time-series metric data |
+| GET | `/metrics/traces` | List recent traces |
+| GET | `/metrics/traces/{id}` | Get trace with spans |
+| GET | `/metrics/latency` | Latency percentiles |
+| GET | `/metrics/costs` | LLM cost breakdown |
+| GET | `/metrics/throughput` | Request throughput |
+| GET | `/metrics/errors` | Error rates |
+| GET | `/metrics/pipeline/stats` | Pipeline execution stats |
 | GET | `/evals` | List evaluation results |
-| POST | `/evals/run` | Trigger evaluation run |
+| GET | `/evals/types` | Available eval types |
+| GET | `/evals/summary` | Eval score summary |
+| GET | `/evals/trend` | Eval scores over time |
+| POST | `/evals/run` | Run single evaluation |
+| POST | `/evals/run-all` | Run all evaluations |
 | GET | `/admin/health` | Health check |
 | GET | `/admin/config` | Current configuration |
 | POST | `/admin/maintenance` | Trigger maintenance |

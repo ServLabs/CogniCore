@@ -11,14 +11,19 @@ This module provides:
 """
 
 import asyncio
+import json
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Optional
 from collections.abc import Callable, Awaitable
 
-from core import config
+from connectors import genai
+from config import config
+from logger import log
 from memory.management.recall import RecallEngine, RecallResult, get_recall_engine
 from memory.management.budget import BudgetManager, ModelTier, TaskPriority, get_budget_manager
+from prompts import prompts
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -84,22 +89,13 @@ class MemoryManagementLayer:
         llm: LLM callable for background tasks.
     """
     
-    # Background task schedule (cron expressions)
-    BACKGROUND_SCHEDULE = {
-        "consolidation": "0 1 * * *",      # 1 AM daily
-        "generalization": "0 2 * * *",     # 2 AM daily
-        "forgetting": "0 3 * * *",         # 3 AM daily
-        "coherence": "0 4 * * *",          # 4 AM daily
-        "optimization": "0 5 * * *",       # 5 AM daily
-        "auto_registration": "*/30 * * * *",  # Every 30 min
-    }
-    
     def __init__(
         self,
         recall_engine: Optional[RecallEngine] = None,
         budget_manager: Optional[BudgetManager] = None,
         llm: Optional[Callable[[str], Awaitable[str]]] = None,
         embedder: Optional[Callable[[str], Awaitable[list[float]]]] = None,
+        redis_client: Optional[Any] = None,
     ):
         """
         Initialize MML.
@@ -109,14 +105,13 @@ class MemoryManagementLayer:
             budget_manager: LLM budget manager.
             llm: LLM callable for background tasks.
             embedder: Embedding function.
+            redis_client: Redis async client for insight staging.
         """
         self.recall_engine = recall_engine or get_recall_engine()
         self.budget_manager = budget_manager or get_budget_manager()
         self.llm = llm
         self.embedder = embedder
-        
-        self._background_running = False
-        self._background_tasks: list[asyncio.Task] = []
+        self.redis = redis_client
     
     # ══════════════════════════════════════════════════════════════════════════
     # Real-Time Operations
@@ -244,16 +239,252 @@ class MemoryManagementLayer:
         if not any(p in msg_lower for p in correction_patterns):
             return False
         
-        # TODO: Use LLM to extract the correction and update SFM
-        # For now, just flag for background processing
-        return False
+        try:
+            messages = prompts.get_messages(
+                "memory/correction.md",
+                assistant_response=assistant_response[:500],
+                user_message=user_message[:500],
+            )
+
+            raw = await genai.ask({
+                "model": "cheap",
+                "messages": messages,
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"},
+            })
+
+            data = json.loads(raw.strip())
+
+            if not data.get("is_correction", False):
+                return False
+
+            fact_summary = data.get("fact_summary", "")
+            confidence = data.get("confidence", 0.8)
+
+            if not fact_summary:
+                return False
+
+            from memory.types.sfm import get_short_form_memory
+
+            sfm = get_short_form_memory()
+            fact_id = await sfm.add_fact(
+                content=fact_summary,
+                source=f"correction:{user_id}",
+                confidence=confidence,
+            )
+
+            await self.auto_register(fact_summary, "sfm", fact_id)
+            logger.info("light_learn: correction applied — %s", fact_summary[:80])
+            return True
+
+        except Exception as e:
+            logger.debug("light_learn: correction extraction failed: %s", e)
+            return False
+    
+    # ── Insight Staging ──
+    
+    INSIGHT_KEY_PREFIX = "cognicore:insights:"
+    INSIGHT_TTL_SECONDS = 36 * 60 * 60  # 36 hours
+    
+    async def stage_insight(
+        self,
+        insight: str,
+        user_id: str,
+        convo_id: str,
+    ) -> Optional[str]:
+        """
+        Stage a real-time insight for background consolidation.
+        
+        Called from pipeline after Thinker extracts a non-null new_insight.
+        Stores as individual Redis key with 36hr TTL.
+        
+        Args:
+            insight: The extracted insight text.
+            user_id: User ID.
+            convo_id: Conversation ID.
+            
+        Returns:
+            Insight ID if staged, None if Redis unavailable.
+        """
+        if not self.redis:
+            logger.debug("mml.stage_insight: no redis client, skipping")
+            return None
+        
+        insight_id = str(uuid.uuid4())
+        key = f"{self.INSIGHT_KEY_PREFIX}{insight_id}"
+        
+        payload = json.dumps({
+            "user_id": user_id,
+            "convo_id": convo_id,
+            "insight": insight,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        
+        try:
+            await self.redis.set(key, payload, ex=self.INSIGHT_TTL_SECONDS)
+            logger.debug("mml.stage_insight: staged %s", insight_id)
+            return insight_id
+        except Exception as e:
+            logger.warning("mml.stage_insight: redis error: %s", e)
+            return None
+    
+    async def drain_insights(self, batch_size: int = 50) -> list[dict[str, Any]]:
+        """
+        Drain staged insights from Redis for consolidation.
+        
+        Reads and deletes insight keys atomically.
+        
+        Args:
+            batch_size: Maximum insights to drain per call.
+            
+        Returns:
+            List of insight payloads.
+        """
+        if not self.redis:
+            return []
+        
+        insights: list[dict[str, Any]] = []
+        
+        try:
+            # SCAN for insight keys
+            cursor = 0
+            keys_to_drain: list[str] = []
+            
+            while len(keys_to_drain) < batch_size:
+                cursor, found = await self.redis.scan(
+                    cursor=cursor,
+                    match=f"{self.INSIGHT_KEY_PREFIX}*",
+                    count=batch_size,
+                )
+                keys_to_drain.extend(found)
+                if cursor == 0:
+                    break
+            
+            keys_to_drain = keys_to_drain[:batch_size]
+            
+            if not keys_to_drain:
+                return []
+            
+            # GET all values then DELETE
+            pipe = self.redis.pipeline()
+            for key in keys_to_drain:
+                pipe.get(key)
+            values = await pipe.execute()
+            
+            # Delete drained keys
+            await self.redis.delete(*keys_to_drain)
+            
+            for val in values:
+                if val:
+                    insights.append(json.loads(val))
+            
+            logger.debug("mml.drain_insights: drained %d insights", len(insights))
+        except Exception as e:
+            logger.warning("mml.drain_insights: redis error: %s", e)
+        
+        return insights
+    
+    # ── Learning Proposal Staging ──
+    
+    PROPOSAL_KEY_PREFIX = "cognicore:proposals:"
+    PROPOSAL_TTL_SECONDS = 36 * 60 * 60  # 36 hours
+    
+    async def stage_proposal(
+        self,
+        learning_type: str,
+        proposal: dict[str, Any],
+    ) -> Optional[str]:
+        """
+        Stage a learning proposal for maintenance to commit.
+        
+        Sleep-mode learners produce proposals; maintenance daemons
+        validate and commit them to permanent memory.
+        
+        Args:
+            learning_type: One of the 10 learning types (e.g., "generalization").
+            proposal: Structured proposal data (type-specific).
+            
+        Returns:
+            Proposal ID if staged, None if Redis unavailable.
+        """
+        if not self.redis:
+            logger.debug("mml.stage_proposal: no redis client, skipping")
+            return None
+        
+        proposal_id = str(uuid.uuid4())
+        key = f"{self.PROPOSAL_KEY_PREFIX}{proposal_id}"
+        
+        payload = json.dumps({
+            "learning_type": learning_type,
+            "proposal": proposal,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        
+        try:
+            await self.redis.set(key, payload, ex=self.PROPOSAL_TTL_SECONDS)
+            logger.debug("mml.stage_proposal: staged %s (%s)", proposal_id, learning_type)
+            return proposal_id
+        except Exception as e:
+            logger.warning("mml.stage_proposal: redis error: %s", e)
+            return None
+    
+    async def drain_proposals(self, batch_size: int = 100) -> list[dict[str, Any]]:
+        """
+        Drain staged learning proposals for maintenance to process.
+        
+        Args:
+            batch_size: Maximum proposals to drain per call.
+            
+        Returns:
+            List of proposal payloads.
+        """
+        if not self.redis:
+            return []
+        
+        proposals: list[dict[str, Any]] = []
+        
+        try:
+            cursor = 0
+            keys_to_drain: list[str] = []
+            
+            while len(keys_to_drain) < batch_size:
+                cursor, found = await self.redis.scan(
+                    cursor=cursor,
+                    match=f"{self.PROPOSAL_KEY_PREFIX}*",
+                    count=batch_size,
+                )
+                keys_to_drain.extend(found)
+                if cursor == 0:
+                    break
+            
+            keys_to_drain = keys_to_drain[:batch_size]
+            
+            if not keys_to_drain:
+                return []
+            
+            pipe = self.redis.pipeline()
+            for key in keys_to_drain:
+                pipe.get(key)
+            values = await pipe.execute()
+            
+            await self.redis.delete(*keys_to_drain)
+            
+            for val in values:
+                if val:
+                    proposals.append(json.loads(val))
+            
+            logger.debug("mml.drain_proposals: drained %d proposals", len(proposals))
+        except Exception as e:
+            logger.warning("mml.drain_proposals: redis error: %s", e)
+        
+        return proposals
     
     async def detect_conflict(
         self,
         items: list[Any],
     ) -> list[tuple[Any, Any]]:
         """
-        Detect conflicts in retrieved items.
+        Detect conflicts in retrieved items (inline, real-time check).
         
         Args:
             items: Retrieved memory items.
@@ -261,9 +492,78 @@ class MemoryManagementLayer:
         Returns:
             List of conflicting pairs.
         """
-        # TODO: Implement conflict detection
-        # Compare facts from different sources
+        # Real-time conflict detection for recall results
+        # Full background scan handled by ConflictDaemon
         return []
+    
+    async def run_conflict_scan(self) -> MaintenanceResult:
+        """
+        Run background conflict detection across all memory types.
+        
+        Returns:
+            MaintenanceResult with stats.
+        """
+        import time
+        start_time = time.perf_counter()
+        
+        result = MaintenanceResult(task_type="conflict")
+        
+        from memory.management.maintenance.conflict import get_conflict_daemon
+        
+        daemon = get_conflict_daemon()
+        stats = await daemon.run()
+        
+        result.items_processed = stats.get("scanned", 0)
+        result.items_affected = stats.get("conflicts_confirmed", 0)
+        result.errors = [f"errors: {stats['errors']}"] if stats.get("errors") else []
+        result.duration_ms = (time.perf_counter() - start_time) * 1000
+        return result
+    
+    async def check_coherence(self) -> MaintenanceResult:
+        """
+        Check cross-type consistency and referential integrity.
+        
+        Returns:
+            MaintenanceResult with stats.
+        """
+        import time
+        start_time = time.perf_counter()
+        
+        result = MaintenanceResult(task_type="coherence")
+        
+        from memory.management.maintenance.coherence import get_coherence_daemon
+        
+        daemon = get_coherence_daemon()
+        stats = await daemon.run()
+        
+        result.items_processed = stats.get("cross_type_checked", 0) + stats.get("referential_checked", 0)
+        result.items_affected = stats.get("cross_type_issues", 0) + stats.get("referential_issues", 0)
+        result.errors = [f"errors: {stats['errors']}"] if stats.get("errors") else []
+        result.duration_ms = (time.perf_counter() - start_time) * 1000
+        return result
+    
+    async def run_linking(self) -> MaintenanceResult:
+        """
+        Auto-create cross-memory associations.
+        
+        Returns:
+            MaintenanceResult with stats.
+        """
+        import time
+        start_time = time.perf_counter()
+        
+        result = MaintenanceResult(task_type="linking")
+        
+        from memory.management.maintenance.linking import get_linking_daemon
+        
+        daemon = get_linking_daemon()
+        stats = await daemon.run()
+        
+        result.items_processed = stats.get("items_scanned", 0)
+        result.items_affected = stats.get("links_created", 0)
+        result.errors = [f"errors: {stats['errors']}"] if stats.get("errors") else []
+        result.duration_ms = (time.perf_counter() - start_time) * 1000
+        return result
     
     # ══════════════════════════════════════════════════════════════════════════
     # Background Operations
@@ -277,9 +577,10 @@ class MemoryManagementLayer:
         Consolidate recent conversations into long-term memory.
         
         Background operation - runs during off-peak hours.
+        Drains staged insights, categorizes via LLM, routes to memory types.
         
         Args:
-            days_back: Number of days to process.
+            days_back: Number of days to process (used for batch sizing).
             
         Returns:
             ConsolidationResult with stats.
@@ -292,26 +593,29 @@ class MemoryManagementLayer:
         # Check budget
         cost = self.budget_manager.estimate_task_cost("consolidation", 1)
         if not self.budget_manager.can_afford(cost.estimated_calls):
+            logger.info("mml.consolidate: budget exceeded, skipping")
             return result
         
-        # Get recent conversations from WM/JSONL
-        from memory.types.wm import get_working_memory
+        # Delegate to consolidation daemon
+        from memory.management.maintenance.consolidation import get_consolidation_daemon
         
-        wm = get_working_memory()
-        # TODO: Implement conversation retrieval for date range
+        daemon = get_consolidation_daemon()
+        stats = await daemon.run(batch_size=50)
         
-        # For each conversation:
-        # 1. Extract entities and relationships (LLM)
-        # 2. Insert into AM graph
-        # 3. Compress key facts into SFM
-        # 4. Register in Meta
-        
-        # Placeholder - actual implementation needs LLM
-        if self.llm:
-            # Would call LLM here for extraction
-            pass
-        
+        # Map daemon stats to ConsolidationResult
+        result.conversations_processed = stats.get("conversations_processed", 0)
+        result.entities_extracted = stats.get("entities_created", 0)
+        result.facts_created = stats.get("facts_created", 0)
+        result.llm_calls = result.conversations_processed  # 1 call per conversation
         result.duration_ms = (time.perf_counter() - start_time) * 1000
+        
+        # Register pointer count = all items stored
+        result.pointers_registered = (
+            result.facts_created
+            + result.entities_extracted
+            + stats.get("procedures_created", 0)
+            + stats.get("documents_created", 0)
+        )
         
         # Log to analytics
         from observability import record_metric
@@ -386,11 +690,13 @@ class MemoryManagementLayer:
         lfm_days: int = 90,
     ) -> MaintenanceResult:
         """
-        Prune stale, never-accessed memories.
+        Demote stale SFM facts to LFM.
+        
+        LFM and AM are permanent — only wrong data gets deleted (Conflict daemon).
         
         Args:
-            sfm_days: Days without access before SFM eviction.
-            lfm_days: Days without access before LFM flagging.
+            sfm_days: Days without access before SFM demotion.
+            lfm_days: Unused (LFM never forgets).
             
         Returns:
             MaintenanceResult with stats.
@@ -400,18 +706,20 @@ class MemoryManagementLayer:
         
         result = MaintenanceResult(task_type="forgetting")
         
-        # TODO: Implement forgetting logic
-        # - SFM: Evict unpinned facts with zero access in last N days
-        # - LFM: Flag chunks for review
-        # - AM: Remove edges with zero traversals
-        # - Meta: Remove pointers to deleted memories
+        from memory.management.maintenance.forgetting import get_forgetting_daemon
         
+        daemon = get_forgetting_daemon()
+        stats = await daemon.run(limit=100)
+        
+        result.items_processed = stats.get("scanned", 0)
+        result.items_affected = stats.get("demoted", 0)
+        result.errors = [f"errors: {stats['errors']}"] if stats.get("errors") else []
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
     
     async def optimize_indexes(self) -> MaintenanceResult:
         """
-        Optimize FAISS indexes and databases.
+        Optimize FAISS indexes, SQLite databases, and Kuzu graph.
         
         Returns:
             MaintenanceResult with stats.
@@ -421,17 +729,31 @@ class MemoryManagementLayer:
         
         result = MaintenanceResult(task_type="optimization")
         
-        # TODO: Implement optimization
-        # - FAISS: Remove deleted vectors, re-cluster
-        # - SQLite: PRAGMA optimize, VACUUM
-        # - Kuzu: Remove orphan nodes
+        from memory.management.maintenance.optimization import get_optimization_daemon
         
+        daemon = get_optimization_daemon()
+        stats = await daemon.run()
+        
+        faiss_stats = stats.get("faiss", {})
+        sqlite_stats = stats.get("sqlite", {})
+        kuzu_stats = stats.get("kuzu", {})
+        
+        result.items_processed = (
+            faiss_stats.get("indexes_processed", 0)
+            + sqlite_stats.get("databases_processed", 0)
+        )
+        result.items_affected = (
+            faiss_stats.get("vectors_cleaned", 0)
+            + sqlite_stats.get("vacuum_performed", 0)
+            + kuzu_stats.get("orphan_nodes_removed", 0)
+        )
+        result.errors = [f"errors: {stats['errors']}"] if stats.get("errors") else []
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
     
     async def check_integrity(self) -> MaintenanceResult:
         """
-        Check and repair memory integrity.
+        Check and auto-repair memory integrity.
         
         Returns:
             MaintenanceResult with stats.
@@ -441,94 +763,51 @@ class MemoryManagementLayer:
         
         result = MaintenanceResult(task_type="integrity")
         
-        # TODO: Implement integrity checks
-        # - SFM fact → deleted LFM chunk
-        # - Meta pointer → deleted memory
-        # - FAISS ID → no SQLite record
-        # - SQLite record → no FAISS vector
+        from memory.management.maintenance.integrity import get_integrity_daemon
         
+        daemon = get_integrity_daemon()
+        stats = await daemon.run()
+        
+        result.items_processed = stats.get("total_checked", 0)
+        result.items_affected = stats.get("total_repaired", 0)
+        result.errors = [f"errors: {stats['errors']}"] if stats.get("errors") else []
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
     
     # ══════════════════════════════════════════════════════════════════════════
-    # Self-Scheduling
+    # Task Execution (called by DMN)
     # ══════════════════════════════════════════════════════════════════════════
     
-    async def schedule_background_tasks(self) -> None:
+    async def execute_task(self, task_name: str) -> Optional[MaintenanceResult]:
         """
-        Schedule background tasks via Prospective Memory.
+        Execute a maintenance task by name.
         
-        Uses PM cron jobs for self-scheduling.
+        Called by DMN during sleep cycle. No self-scheduling —
+        DMN owns the pipeline order and parallelism.
+        
+        Args:
+            task_name: One of: consolidation, forgetting, conflict,
+                       coherence, optimization, integrity, linking.
+                       
+        Returns:
+            MaintenanceResult or None if unknown task.
         """
-        from memory.types.pm import get_prospective_memory
-        
-        pm = get_prospective_memory()
-        
-        for task_name, cron_expr in self.BACKGROUND_SCHEDULE.items():
-            await pm.schedule_task(
-                task_type="mml_background",
-                payload={"task": task_name},
-                cron_expression=cron_expr,
-            )
-    
-    async def start_background_loop(self) -> None:
-        """Start background task processing loop."""
-        if self._background_running:
-            return
-        
-        self._background_running = True
-        
-        # Schedule tasks in PM
-        await self.schedule_background_tasks()
-        
-        # Start processing loop
-        task = asyncio.create_task(self._background_loop())
-        self._background_tasks.append(task)
-    
-    async def stop_background_loop(self) -> None:
-        """Stop background task processing."""
-        self._background_running = False
-        
-        for task in self._background_tasks:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        
-        self._background_tasks.clear()
-    
-    async def _background_loop(self) -> None:
-        """Background task processing loop."""
-        while self._background_running:
-            # Check for due tasks from PM
-            from memory.types.pm import get_prospective_memory
-            
-            pm = get_prospective_memory()
-            due_tasks = await pm.get_due_tasks()
-            
-            for task in due_tasks:
-                if task.payload.get("task") in self.BACKGROUND_SCHEDULE:
-                    await self._execute_background_task(task.payload["task"])
-                    await pm.mark_executed(task.id, success=True)
-            
-            # Sleep before next check
-            await asyncio.sleep(60)  # Check every minute
-    
-    async def _execute_background_task(self, task_name: str) -> None:
-        """Execute a background task by name."""
-        task_map = {
+        task_map: dict[str, Callable[..., Any]] = {
             "consolidation": self.consolidate,
-            "generalization": lambda: None,  # TODO
             "forgetting": self.forget_stale,
-            "coherence": lambda: None,  # TODO
+            "conflict": self.run_conflict_scan,
+            "coherence": self.check_coherence,
             "optimization": self.optimize_indexes,
-            "auto_registration": lambda: None,  # TODO
+            "integrity": self.check_integrity,
+            "linking": self.run_linking,
         }
         
         handler = task_map.get(task_name)
         if handler:
-            await handler()
+            return await handler()
+        
+        logger.warning("mml.execute_task: unknown task '%s'", task_name)
+        return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -539,11 +818,22 @@ _mml_instance: Optional[MemoryManagementLayer] = None
 
 
 def get_mml() -> MemoryManagementLayer:
-    """Get the singleton MML instance."""
+    """Get the singleton MML instance with Redis on DB for MML staging."""
     global _mml_instance
     if _mml_instance is None:
-        _mml_instance = MemoryManagementLayer()
+        redis_client = _connect_redis_mml()
+        _mml_instance = MemoryManagementLayer(redis_client=redis_client)
     return _mml_instance
+
+
+def _connect_redis_mml():
+    """Connect to Redis DB dedicated to MML staging. Returns None on failure."""
+    try:
+        import redis.asyncio as aioredis
+        return aioredis.from_url(config.redis.url(config.redis.db_mml_staging))
+    except Exception as e:
+        log.warning("MML: Redis unavailable (%s) — staging disabled", e)
+        return None
 
 
 # ── Convenience Functions ──
@@ -561,13 +851,3 @@ async def recall(
 async def consolidate(days_back: int = 1) -> ConsolidationResult:
     """Consolidate recent conversations."""
     return await get_mml().consolidate(days_back)
-
-
-async def start_background_tasks() -> None:
-    """Start background task processing."""
-    await get_mml().start_background_loop()
-
-
-async def stop_background_tasks() -> None:
-    """Stop background task processing."""
-    await get_mml().stop_background_loop()

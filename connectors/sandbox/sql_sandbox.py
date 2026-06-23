@@ -9,7 +9,7 @@ import re
 import time
 from typing import Any, Optional
 
-from core import config
+from config import config
 from connectors.base import BaseSandbox, SandboxResult, ConnectorInfo, ConnectorStatus, ConnectorType
 
 
@@ -37,9 +37,9 @@ class SQLSandbox(BaseSandbox):
         r"\bREVOKE\b",
         r"\bEXEC\b",
         r"\bEXECUTE\b",
-        r"--",  # Comments (potential injection)
-        r"/\*",  # Block comments
-        r";.*;",  # Multiple statements
+        r"(?:^|\s)--",    # SQL line comments (preceded by whitespace or start of line)
+        r"/\*",           # Block comments
+        r";\s*\S",        # Multiple statements (semicolon followed by non-whitespace)
     ]
     
     def __init__(self, connector=None):
@@ -165,6 +165,41 @@ class SQLSandbox(BaseSandbox):
             return "Only SELECT, WITH, EXPLAIN, SHOW, DESCRIBE queries are allowed"
         
         return None
+    
+    def tool_schema(self) -> dict[str, Any]:
+        """Expose SQL sandbox as a tool."""
+        return {
+            "name": "run_sql",
+            "description": (
+                "Execute read-only SQL queries against the connected database. "
+                "Only SELECT, WITH, EXPLAIN, SHOW, DESCRIBE are allowed. "
+                "Returns JSON-formatted query results."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "SQL query to execute (read-only).",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Query parameters for parameterized queries.",
+                    },
+                },
+                "required": ["query"],
+            },
+        }
+    
+    async def execute_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute SQL query via tool interface."""
+        result = await self.execute(
+            code=params["query"],
+            context=params.get("params"),
+        )
+        if result.success:
+            return {"result": result.output, "execution_time_ms": result.execution_time_ms}
+        return {"error": result.error, "execution_time_ms": result.execution_time_ms}
     
     def info(self) -> ConnectorInfo:
         """Return connector info."""

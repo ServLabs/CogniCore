@@ -6,8 +6,8 @@ Evaluate recall precision and coverage using labeled query-document pairs.
 
 from typing import Any, Optional
 
-from evals.runner import EvalResult
-from evals.metrics import precision_at_k, recall_at_k, f1_score
+from observability.evals.runner import EvalResult
+from observability.evals.metrics import precision_at_k, recall_at_k, f1_score
 
 
 async def eval_recall_quality(

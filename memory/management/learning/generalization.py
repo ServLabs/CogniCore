@@ -17,8 +17,8 @@ from collections.abc import Callable, Awaitable
 
 import numpy as np
 
-from core import config, log
-from core import audit
+from logger import log
+from observability import audit
 
 
 @dataclass

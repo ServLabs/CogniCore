@@ -10,7 +10,9 @@ Central registry for all connectors. Provides:
 
 from typing import Any, Optional
 
-from connectors.base import BaseConnector, ConnectorInfo, ConnectorStatus
+from logger import log
+from observability import audit
+from connectors.base import BaseConnector, ConnectorAuthError, ConnectorInfo, ConnectorStatus
 
 
 class ConnectorRegistry:
@@ -85,23 +87,34 @@ class ConnectorRegistry:
         """
         results = {}
         for name, connector in self._connectors.items():
-            try:
-                if connector.is_configured():
-                    await connector.connect()
-                    results[name] = True
-                else:
-                    results[name] = False
-            except Exception:
+            if not connector.is_configured():
+                log.info("Connector '%s' not configured — skipping", name)
+                audit.log_raw("connector", "connect", name, "skipped", details={"reason": "not_configured"})
                 results[name] = False
+                continue
+            try:
+                await connector.connect()
+                results[name] = True
+                log.info("Connector '%s' connected", name)
+                audit.log_raw("connector", "connect", name, "completed")
+            except ConnectorAuthError as e:
+                results[name] = False
+                log.error("Connector '%s' auth failed: %s", name, e)
+                audit.log_raw("connector", "connect", name, "failed", error=f"AUTH: {e}")
+            except Exception as e:
+                results[name] = False
+                log.error("Connector '%s' connect failed: %s", name, e)
+                audit.log_raw("connector", "connect", name, "failed", error=str(e))
         return results
     
     async def disconnect_all(self) -> None:
         """Disconnect all registered connectors."""
-        for connector in self._connectors.values():
+        for name, connector in self._connectors.items():
             try:
                 await connector.disconnect()
-            except Exception:
-                pass  # Best effort
+                log.debug("Connector '%s' disconnected", name)
+            except Exception as e:
+                log.warning("Connector '%s' disconnect error: %s", name, e)
     
     async def health_check_all(self) -> dict[str, bool]:
         """
@@ -113,9 +126,13 @@ class ConnectorRegistry:
         results = {}
         for name, connector in self._connectors.items():
             try:
-                results[name] = await connector.health_check()
-            except Exception:
+                healthy = await connector.health_check()
+                results[name] = healthy
+                if not healthy:
+                    log.warning("Connector '%s' health check unhealthy", name)
+            except Exception as e:
                 results[name] = False
+                log.warning("Connector '%s' health check error: %s", name, e)
         return results
     
     def get_status(self) -> dict[str, Any]:
@@ -136,6 +153,94 @@ class ConnectorRegistry:
                 if c.info().status == ConnectorStatus.CONNECTED
             ),
         }
+    
+    async def bootstrap(self) -> tuple[dict[str, bool], dict[str, bool]]:
+        """
+        Register all default connectors, connect, and health-check.
+        
+        This is the single entry point for connector setup.
+        Adding/removing connectors only requires changing this method.
+        
+        Returns:
+            Tuple of (connect_results, health_results).
+        """
+        from config import config
+        from connectors.data import FileConnector
+        from connectors.ai import LLMConnector
+        from connectors._internal import EmbeddingConnector, NLIConnector
+        from connectors.sandbox import PythonSandbox, SQLSandbox
+        
+        # ── Core connectors (always registered) ──
+        self.register("file", FileConnector(base_dir=config.paths.data_dir))
+        self.register("llm", LLMConnector())
+        self.register("embedder", EmbeddingConnector())
+        self.register("nli", NLIConnector())
+        self.register("python_sandbox", PythonSandbox())
+        self.register("sql_sandbox", SQLSandbox())
+        
+        # ── Optional data connectors (register only if configured) ──
+        from connectors.data import SnowflakeConnector, DatabricksConnector, AzureSQLConnector
+        
+        if config.snowflake.account:
+            self.register("snowflake", SnowflakeConnector())
+        if config.databricks.host:
+            self.register("databricks", DatabricksConnector())
+        if config.azure_sql.server or config.azure_sql.connection_string:
+            self.register("azure_sql", AzureSQLConnector())
+        
+        # ── Connect and health-check ──
+        connect_results = await self.connect_all()
+        health_results = await self.health_check_all()
+        
+        return connect_results, health_results
+    
+    # ══════════════════════════════════════════════════════════════════════════
+    # Tool Discovery & Execution
+    # ══════════════════════════════════════════════════════════════════════════
+    
+    def get_tool_schemas(self) -> list[dict[str, Any]]:
+        """
+        Collect tool schemas from all registered connectors that expose one.
+        
+        Returns:
+            List of OpenAI function-calling format tool schemas.
+        """
+        schemas = []
+        for name, connector in self._connectors.items():
+            schema = connector.tool_schema()
+            if schema is not None:
+                schemas.append(schema)
+        return schemas
+    
+    def get_tool_names(self) -> list[str]:
+        """List names of all tool-capable connectors."""
+        return [
+            name for name, connector in self._connectors.items()
+            if connector.tool_schema() is not None
+        ]
+    
+    async def execute_tool(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+        """
+        Execute a tool by name with given parameters.
+        
+        Args:
+            tool_name: Name of the tool (matches tool_schema()['name']).
+            params: Parameters for tool execution.
+            
+        Returns:
+            Tool result dict.
+            
+        Raises:
+            KeyError: If tool_name not found.
+            ValueError: If connector doesn't support tool execution.
+        """
+        # Find connector by tool schema name
+        for name, connector in self._connectors.items():
+            schema = connector.tool_schema()
+            if schema and schema["name"] == tool_name:
+                return await connector.execute_tool(params)
+        
+        raise KeyError(f"Tool not found: {tool_name}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

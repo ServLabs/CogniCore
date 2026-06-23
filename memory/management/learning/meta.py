@@ -14,8 +14,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from collections.abc import Callable
 
-from core import config, log
-from core import audit
+from logger import log
+from observability import audit
 
 
 @dataclass

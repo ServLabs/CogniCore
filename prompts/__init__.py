@@ -11,9 +11,8 @@ Structure:
 - prompts/meta/ - Meta/self-reflection (DMN, conflict resolution)
 """
 
-from prompts.manager import PromptManager, prompts
+from prompts.manager import prompts
 
 __all__ = [
-    "PromptManager",
     "prompts",
 ]

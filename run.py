@@ -26,9 +26,34 @@ Environment Variables:
 
 import asyncio
 import signal
-from typing import Any, Optional
+from typing import Any
 
-from core import config, log, audit
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from config import config
+from logger import log
+from observability import audit
+
+# Connectors
+from connectors import get_registry
+
+# Memory
+from memory import get_meta_memory, get_short_form_memory, get_prospective_memory, get_mml
+
+# Core
+from observability import get_analytics
+from response import get_pipeline
+
+# Control
+from control import get_salience_network, get_cen, get_dmn, get_governor
+
+# Interfaces
+from interfaces.chat import get_chat_app
+from interfaces.admin import admin_router
+from interfaces.service import service_router
+from interfaces.scheduled import scheduled_router
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -67,26 +92,12 @@ async def bootstrap() -> dict[str, Any]:
         )
         log.info(f"Config loaded: debug={config.debug}")
         
-        # Phase 2: Connectors
-        from connectors.registry import get_registry
+        # Phase 2: Verify infrastructure
+        await _verify_infrastructure()
         
+        # Phase 3: Connectors
         registry = get_registry()
-        
-        # Register default connectors
-        from connectors.data import FileConnector
-        from connectors.ai import LLMConnector, EmbeddingConnector, NLIConnector
-        from connectors.sandbox import PythonSandbox, SQLSandbox
-        
-        registry.register("file", FileConnector(base_dir=config.paths.data_dir))
-        registry.register("llm", LLMConnector())
-        registry.register("embedder", EmbeddingConnector())
-        registry.register("nli", NLIConnector())
-        registry.register("python_sandbox", PythonSandbox())
-        registry.register("sql_sandbox", SQLSandbox())
-        
-        # Connect all configured connectors
-        connect_results = await registry.connect_all()
-        health = await registry.health_check_all()
+        connect_results, health = await registry.bootstrap()
         
         audit.log_raw(
             "agent",
@@ -99,12 +110,8 @@ async def bootstrap() -> dict[str, Any]:
         
         components["registry"] = registry
         
-        # Phase 3: Memory
+        # Phase 4: Memory
         # Memory types are singletons, just import to initialize
-        from memory.types.meta import get_meta_memory
-        from memory.types.sfm import get_short_form_memory
-        from memory.types.pm import get_prospective_memory
-        
         meta = get_meta_memory()
         sfm = get_short_form_memory()
         pm = get_prospective_memory()
@@ -116,13 +123,10 @@ async def bootstrap() -> dict[str, Any]:
         components["sfm"] = sfm
         components["pm"] = pm
         
-        # Phase 4: Core Systems
-        from memory.management import get_mml
-        from observability import get_analytics
-        from response import get_pipeline
-        
+        # Phase 5: Core Systems
         mml = get_mml()
         analytics = get_analytics()
+        await analytics.start()  # Start background flush loop
         pipeline = get_pipeline()
         
         audit.log_raw("agent", "core_ready", "main", "completed")
@@ -132,9 +136,7 @@ async def bootstrap() -> dict[str, Any]:
         components["analytics"] = analytics
         components["pipeline"] = pipeline
         
-        # Phase 5: Control
-        from control import get_salience_network, get_cen, get_dmn, get_governor
-        
+        # Phase 6: Control
         governor = get_governor()
         salience = get_salience_network()
         dmn = get_dmn()
@@ -147,15 +149,6 @@ async def bootstrap() -> dict[str, Any]:
         components["salience"] = salience
         components["dmn"] = dmn
         components["cen"] = cen
-        
-        # Phase 6: Run migrations
-        from core import migrate
-        
-        migrate(config.paths.hot_db)
-        migrate(config.paths.cold_db)
-        
-        audit.log_raw("agent", "migrations_complete", "main", "completed")
-        log.info("Migrations complete")
         
         # Phase 7: Start CEN
         await cen.start()
@@ -177,6 +170,62 @@ async def bootstrap() -> dict[str, Any]:
         raise
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Infrastructure Verification
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _verify_infrastructure() -> None:
+    """
+    Verify all required infrastructure is reachable before proceeding.
+    
+    Checks:
+    - SQLite directories exist (create if missing)
+    - Redis is reachable (warn + fallback if not)
+    - Kuzu graph DB is accessible
+    - FAISS index directory exists
+    
+    Raises:
+        RuntimeError: If critical infrastructure is unreachable.
+    """
+    import redis.asyncio as aioredis
+    
+    issues: list[str] = []
+    
+    # SQLite: Ensure data directories exist
+    for dir_path in (config.paths.sqlite_dir, config.paths.faiss_dir, config.paths.logs_dir, config.paths.audit_dir):
+        dir_path.mkdir(parents=True, exist_ok=True)
+    log.info("Infrastructure: data directories verified")
+    
+    # Redis: Check connectivity
+    try:
+        redis = aioredis.from_url(
+            config.redis.url(config.redis.db_working_memory),
+        )
+        await redis.ping()
+        await redis.aclose()
+        log.info("Infrastructure: Redis reachable at %s:%s", config.redis.host, config.redis.port)
+    except Exception as e:
+        if config.redis.fallback_enabled:
+            log.warning("Infrastructure: Redis unavailable (%s) — using local fallback", e)
+        else:
+            issues.append(f"Redis unreachable: {e}")
+    
+    # Kuzu: Check graph DB directory
+    kuzu_dir = config.paths.kuzu_dir
+    kuzu_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Infrastructure: Kuzu directory verified at %s", kuzu_dir)
+    
+    # FAISS: Verify index directory
+    faiss_dir = config.paths.faiss_dir
+    faiss_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Infrastructure: FAISS directory verified at %s", faiss_dir)
+    
+    if issues:
+        raise RuntimeError(f"Infrastructure check failed: {'; '.join(issues)}")
+    
+    audit.log_raw("agent", "infrastructure_verified", "main", "completed")
+
+
 async def shutdown(components: dict[str, Any]) -> None:
     """
     Graceful shutdown — close everything in reverse order.
@@ -192,6 +241,11 @@ async def shutdown(components: dict[str, Any]) -> None:
         cen = components.get("cen")
         if cen:
             await cen.stop()
+        
+        # Flush and stop analytics
+        analytics = components.get("analytics")
+        if analytics:
+            await analytics.stop()
         
         # Disconnect connectors
         registry = components.get("registry")
@@ -229,10 +283,6 @@ def main() -> None:
     
     Usage: python run.py
     """
-    import uvicorn
-    from fastapi import FastAPI
-    from fastapi.middleware.cors import CORSMiddleware
-    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
@@ -256,12 +306,6 @@ def main() -> None:
         print(f"  REST API: http://{config.api.rest_host}:{config.api.rest_port}")
         
         # Create apps from interfaces
-        from interfaces.chat import get_chat_app
-        from interfaces.admin import admin_router
-        from interfaces.service import service_router
-        from interfaces.scheduled import scheduled_router
-        
-        # Chat app (WebSocket)
         chat_app = get_chat_app()
         
         # REST API app (admin + service + scheduled)

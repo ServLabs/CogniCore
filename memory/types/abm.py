@@ -13,7 +13,7 @@ This module provides:
 from dataclasses import dataclass
 from typing import Optional
 
-from core import config, AgentIdentity
+from config import config, AgentIdentity
 
 
 @dataclass(frozen=True)

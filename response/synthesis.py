@@ -2,15 +2,15 @@
 Response Synthesis
 
 Final step — combine all outputs (recall, skill results, creativity, prediction)
-into a coherent response.
+into a coherent response via AI.
 """
 
+import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Optional
-from collections.abc import Callable, Awaitable
 
-from core import config
+from connectors import genai
+from prompts import prompts
 from response.thinking import ThoughtPlan
 from response.decision import ExecutionPlan
 
@@ -29,7 +29,7 @@ class SynthesisInput:
     skill_results: list[dict[str, Any]] = field(default_factory=list)
     creativity_output: Optional[str] = None
     prediction_output: Optional[str] = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
@@ -50,7 +50,7 @@ class SynthesisOutput:
     sources_used: list[str] = field(default_factory=list)
     follow_up_suggestions: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "response": self.response,
@@ -67,156 +67,107 @@ class SynthesisOutput:
 
 class Synthesizer:
     """
-    Response synthesis subsystem.
-    
-    Provides:
-    - Combining multiple outputs into coherent response
-    - Formatting and structuring
-    - Source attribution
-    - Follow-up suggestions
-    
-    Attributes:
-        llm: LLM callable for synthesis.
+    AI-powered response synthesis.
+
+    Uses genai.ask() to combine all pipeline outputs into a coherent response.
+    Falls back to a simple concatenation if genai is unreachable.
     """
-    
-    def __init__(
-        self,
-        llm: Optional[Callable[[str], Awaitable[str]]] = None,
-    ):
-        """
-        Initialize Synthesizer.
-        
-        Args:
-            llm: LLM callable for synthesis.
-        """
-        self.llm = llm
-    
-    async def synthesize(
-        self,
-        synthesis_input: SynthesisInput,
-    ) -> SynthesisOutput:
+
+    async def synthesize(self, synthesis_input: SynthesisInput) -> SynthesisOutput:
         """
         Synthesize a response from all inputs.
-        
+
         Args:
             synthesis_input: All inputs for synthesis.
-            
+
         Returns:
             SynthesisOutput with final response.
         """
-        # Collect all content
-        content_parts = []
-        sources = []
-        
-        # Add recall context
+        information = self._build_information(synthesis_input)
+        messages = prompts.get_messages(
+            "response/synthesis.md",
+            query=synthesis_input.query,
+            understanding=synthesis_input.thought_plan.understanding,
+            complexity=synthesis_input.thought_plan.complexity.value,
+            strategy=synthesis_input.execution_plan.strategy.value,
+            information=information,
+        )
+
+        try:
+            raw = await genai.ask({
+                "model": "default",
+                "messages": messages,
+                "temperature": 0.3,
+                "response_format": {"type": "json_object"},
+            })
+            return self._parse_response(raw, synthesis_input)
+        except Exception:
+            return self._fallback(synthesis_input, information)
+
+    def _build_information(self, synthesis_input: SynthesisInput) -> str:
+        """Collect all available information into a single block."""
+        parts = []
+
         if synthesis_input.recall_context:
-            content_parts.append(f"Context:\n{synthesis_input.recall_context}")
-            sources.append("memory")
-        
-        # Add skill results
+            parts.append(f"[Memory]\n{synthesis_input.recall_context}")
+
         for result in synthesis_input.skill_results:
             if result.get("output"):
-                content_parts.append(f"Result:\n{result['output']}")
-                sources.append(result.get("skill_name", "skill"))
-        
-        # Add creativity output
+                name = result.get("skill") or result.get("task", "task")
+                parts.append(f"[Task: {name}]\n{result['output']}")
+
         if synthesis_input.creativity_output:
-            content_parts.append(f"Insights:\n{synthesis_input.creativity_output}")
-            sources.append("creativity")
-        
-        # Add prediction output
+            parts.append(f"[Creative Insights]\n{synthesis_input.creativity_output}")
+
         if synthesis_input.prediction_output:
-            content_parts.append(f"Forecast:\n{synthesis_input.prediction_output}")
-            sources.append("prediction")
-        
-        # Synthesize with LLM if available
-        if self.llm and content_parts:
-            response = await self._llm_synthesize(
-                query=synthesis_input.query,
-                content_parts=content_parts,
-                thought_plan=synthesis_input.thought_plan,
+            parts.append(f"[Prediction]\n{synthesis_input.prediction_output}")
+
+        return "\n\n".join(parts) if parts else "(No information available)"
+
+    def _parse_response(
+        self, raw: str, synthesis_input: SynthesisInput
+    ) -> SynthesisOutput:
+        """Parse genai JSON response into SynthesisOutput."""
+        try:
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text
+                text = text.rsplit("```", 1)[0].strip()
+
+            data = json.loads(text)
+
+            return SynthesisOutput(
+                response=data.get("response", ""),
+                confidence=float(data.get("confidence", 0.8)),
+                sources_used=data.get("sources_used", []),
+                follow_up_suggestions=data.get("follow_up_suggestions", [])[:3],
+                metadata={
+                    "complexity": synthesis_input.thought_plan.complexity.value,
+                    "strategy": synthesis_input.execution_plan.strategy.value,
+                },
             )
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            information = self._build_information(synthesis_input)
+            return self._fallback(synthesis_input, information)
+
+    def _fallback(
+        self, synthesis_input: SynthesisInput, information: str
+    ) -> SynthesisOutput:
+        """Fallback when genai is unreachable."""
+        if information == "(No information available)":
+            response = "I don't have enough information to answer that question."
         else:
-            # Simple concatenation fallback
-            response = self._simple_synthesize(
-                query=synthesis_input.query,
-                content_parts=content_parts,
-            )
-        
-        # Generate follow-up suggestions
-        follow_ups = self._generate_follow_ups(synthesis_input)
-        
+            response = information
+
         return SynthesisOutput(
             response=response,
-            confidence=synthesis_input.thought_plan.confidence,
-            sources_used=sources,
-            follow_up_suggestions=follow_ups,
+            confidence=0.5,
             metadata={
                 "complexity": synthesis_input.thought_plan.complexity.value,
                 "strategy": synthesis_input.execution_plan.strategy.value,
+                "fallback": True,
             },
         )
-    
-    async def _llm_synthesize(
-        self,
-        query: str,
-        content_parts: list[str],
-        thought_plan: ThoughtPlan,
-    ) -> str:
-        """Use LLM to synthesize response."""
-        if not self.llm:
-            return self._simple_synthesize(query, content_parts)
-        
-        prompt = f"""Synthesize a response to the user's query using the provided information.
-
-Query: {query}
-
-Understanding: {thought_plan.understanding}
-
-Available Information:
-{chr(10).join(content_parts)}
-
-Instructions:
-- Be concise and direct
-- Use the provided information to answer the query
-- If information is incomplete, acknowledge it
-- Maintain a helpful, professional tone
-"""
-        
-        return await self.llm(prompt)
-    
-    def _simple_synthesize(
-        self,
-        query: str,
-        content_parts: list[str],
-    ) -> str:
-        """Simple synthesis without LLM."""
-        if not content_parts:
-            return "I don't have enough information to answer that question."
-        
-        # Join content with formatting
-        return "\n\n".join(content_parts)
-    
-    def _generate_follow_ups(
-        self,
-        synthesis_input: SynthesisInput,
-    ) -> list[str]:
-        """Generate follow-up suggestions."""
-        suggestions = []
-        
-        # Based on complexity
-        if synthesis_input.thought_plan.complexity.value == "analysis":
-            suggestions.append("Would you like me to dive deeper into any specific aspect?")
-        
-        # Based on creativity
-        if synthesis_input.creativity_output:
-            suggestions.append("Would you like to explore any of these alternatives?")
-        
-        # Based on prediction
-        if synthesis_input.prediction_output:
-            suggestions.append("Would you like to see different scenarios?")
-        
-        return suggestions[:3]  # Max 3 suggestions
 
 
 # ══════════════════════════════════════════════════════════════════════════════

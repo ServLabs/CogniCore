@@ -10,8 +10,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from core import log
-from core import audit
+from logger import log
+from observability import audit
 from interfaces.scheduled.tasks import (
     trigger_task,
     get_task_status,

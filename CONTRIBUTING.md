@@ -40,15 +40,15 @@ git clone https://github.com/YOUR_USERNAME/CogniCore.git
 cd CogniCore
 
 # Create virtual environment
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 pip install -r requirements-dev.txt  # Development dependencies
 
 # Run tests
-pytest
+COGNICORE_DATA_DIR=/tmp/cognicore pytest
 ```
 
 ## Coding Style
@@ -107,13 +107,13 @@ Before contributing, familiarize yourself with the project structure:
 
 ```
 CogniCore/
-├── core/           # Infrastructure (config, logger, audit, errors)
+├── config.py       # 3-tier env var config (Tier 3 > 2 > 1)
 ├── interfaces/     # External APIs (admin, service, chat, scheduled)
-├── memory/         # Memory layer (9 types + MML)
-├── control/        # Brain control (CEN, DMN, salience)
-├── response/       # Response pipeline
-├── connectors/     # External connections
-├── observability/  # Monitoring (analytics, evals)
+├── memory/         # Memory layer (9 types + MML + learning + maintenance)
+├── control/        # Brain control (CEN, DMN, salience, governor)
+├── response/       # Response pipeline + sub-agents
+├── connectors/     # External connections (AI, data, sandbox)
+├── observability/  # Telemetry (audit, tracing, analytics/DuckDB, evals)
 └── prompts/        # LLM prompt templates
 ```
 

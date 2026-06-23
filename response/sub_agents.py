@@ -1,388 +1,425 @@
 """
-Sub-Agent Memory Access (Section 17)
+Sub-Agent Executor
 
-Sub-agents have read-only access to memory via MML.
-Provides isolation and prevents sub-agents from corrupting memory.
+Two sub-agent types:
+1. SubAgent — Autonomous task execution with memory recall + reasoning.
+2. ToolSubAgent — ReAct-style tool-use loop for answering queries that
+   require external data, computation, or multi-step reasoning.
 """
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+import json
+import time
 from typing import Any, Optional
 
-from core import audit
-from core import log
+from connectors import genai, get_registry
+from config import config
+from logger import log
+from memory import recall
+from observability import audit, record_latency, record_count
+from prompts import prompts
 
 
-@dataclass
-class SubAgentConfig:
-    """Configuration for a sub-agent."""
-    task: str
-    memory_access: bool = True     # Can read memory
-    memory_write: bool = False     # Cannot write (read-only)
-    max_depth: int = 1             # No nested sub-agents
-    timeout_seconds: int = 30
-    max_tokens: int = 4000
-
-
-class ReadOnlyMMLWrapper:
-    """
-    Wrapper that only exposes read operations.
-    
-    Sub-agents use this to access memory without write capability.
-    """
-    
-    def __init__(self, mml):
-        """
-        Initialize read-only wrapper.
-        
-        Args:
-            mml: Memory management layer.
-        """
-        self._mml = mml
-    
-    async def recall(
-        self,
-        query: str,
-        memory_types: Optional[list[str]] = None,
-        top_k: int = 10,
-    ) -> list[Any]:
-        """
-        Read-only recall.
-        
-        Args:
-            query: Search query.
-            memory_types: Memory types to search.
-            top_k: Max results.
-            
-        Returns:
-            List of recall results.
-        """
-        if memory_types is None:
-            memory_types = ["sfm", "lfm", "am"]
-        
-        return await self._mml.recall(query, memory_types, top_k)
-    
-    async def sfm_get(self, fact_id: str) -> Optional[Any]:
-        """
-        Read a specific fact.
-        
-        Args:
-            fact_id: Fact ID.
-            
-        Returns:
-            Fact or None.
-        """
-        return await self._mml.sfm_get(fact_id)
-    
-    async def sfm_search(
-        self,
-        query: str,
-        top_k: int = 10,
-    ) -> list[Any]:
-        """
-        Search facts.
-        
-        Args:
-            query: Search query.
-            top_k: Max results.
-            
-        Returns:
-            List of facts.
-        """
-        return await self._mml.sfm_search(query, top_k)
-    
-    async def lfm_get(self, doc_id: str) -> Optional[Any]:
-        """
-        Read a specific document.
-        
-        Args:
-            doc_id: Document ID.
-            
-        Returns:
-            Document or None.
-        """
-        return await self._mml.lfm_get(doc_id)
-    
-    async def lfm_search(
-        self,
-        query: str,
-        top_k: int = 10,
-    ) -> list[Any]:
-        """
-        Search documents.
-        
-        Args:
-            query: Search query.
-            top_k: Max results.
-            
-        Returns:
-            List of documents.
-        """
-        return await self._mml.lfm_search(query, top_k)
-    
-    async def am_get_neighbors(
-        self,
-        entity_id: str,
-        depth: int = 1,
-    ) -> list[Any]:
-        """
-        Get graph neighbors.
-        
-        Args:
-            entity_id: Entity ID.
-            depth: Traversal depth.
-            
-        Returns:
-            List of neighbors.
-        """
-        return await self._mml.am_get_neighbors(entity_id, depth)
-    
-    # No write methods exposed
-    # sfm_write, lfm_ingest, am_add_edge, etc. are NOT available
-
+# ══════════════════════════════════════════════════════════════════════════════
+# Sub-Agent
+# ══════════════════════════════════════════════════════════════════════════════
 
 class SubAgent:
     """
-    Parallel worker with read-only memory access.
-    
-    Sub-agents can:
-    - Read from memory (SFM, LFM, AM)
-    - Execute LLM calls
-    - Return results to parent
-    
-    Sub-agents cannot:
-    - Write to memory
-    - Spawn nested sub-agents (beyond max_depth)
-    - Access WM directly
+    A single autonomous execution unit.
+
+    Given a task description and optional skill hint, the sub-agent:
+    1. Calls genai to plan its approach
+    2. Executes actions (recall, skill, reason)
+    3. Returns a result dict
     """
+
+    def __init__(
+        self,
+        task: str,
+        skill: Optional[str] = None,
+        context: str = "",
+        user_id: Optional[str] = None,
+        convo_id: Optional[str] = None,
+        timeout_seconds: int = 0,
+    ):
+        self.task = task
+        self.skill = skill
+        self.context = context
+        self.user_id = user_id
+        self.convo_id = convo_id
+        self.timeout = timeout_seconds or config.pipeline.sub_agent_timeout_seconds
+
+    async def run(self) -> dict[str, Any]:
+        """
+        Execute the task autonomously.
+
+        Returns:
+            Result dict with task, output, success, error keys.
+        """
+        start = time.perf_counter()
+        try:
+            result = await asyncio.wait_for(self._execute(), timeout=self.timeout)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            asyncio.create_task(record_latency("sub_agent", "execution", elapsed_ms, skill=self.skill or "none"))
+            asyncio.create_task(record_count("sub_agent", "success_count"))
+            return result
+        except asyncio.TimeoutError:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            asyncio.create_task(record_latency("sub_agent", "execution", elapsed_ms, skill=self.skill or "none"))
+            asyncio.create_task(record_count("sub_agent", "timeout_count"))
+            return {
+                "task": self.task,
+                "output": None,
+                "success": False,
+                "error": f"Task timed out after {self.timeout}s",
+            }
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            asyncio.create_task(record_latency("sub_agent", "execution", elapsed_ms, skill=self.skill or "none"))
+            asyncio.create_task(record_count("sub_agent", "error_count"))
+            return {
+                "task": self.task,
+                "output": None,
+                "success": False,
+                "error": str(e),
+            }
+
+    async def _execute(self) -> dict[str, Any]:
+        """Core execution: call genai, process actions, return result."""
+        messages = prompts.get_messages(
+            "response/sub_agent.md",
+            task=self.task,
+            skill=self.skill or "none",
+            context=self.context or "(no additional context)",
+        )
+
+        raw = await genai.ask({
+            "model": config.pipeline.default_model_tier,
+            "messages": messages,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        })
+
+        data = self._parse(raw)
+
+        # Execute actions if the agent planned any recall steps
+        actions = data.get("actions", [])
+        recall_results = []
+
+        for action in actions:
+            if action.get("type") == "recall" and action.get("query"):
+                recall_result = await recall(
+                    query=action["query"],
+                    user_id=self.user_id,
+                    convo_id=self.convo_id,
+                    top_k=5,
+                )
+                if recall_result.has_results:
+                    recall_results.append(recall_result.to_context())
+
+        # If recall returned new info, do a second genai pass with enriched context
+        if recall_results:
+            enriched_context = f"{self.context}\n\nRecalled:\n" + "\n".join(recall_results)
+            messages = prompts.get_messages(
+                "response/sub_agent.md",
+                task=self.task,
+                skill=self.skill or "none",
+                context=enriched_context,
+            )
+            raw = await genai.ask({
+                "model": config.pipeline.default_model_tier,
+                "messages": messages,
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+            })
+            data = self._parse(raw)
+
+        return {
+            "task": self.task,
+            "skill": self.skill,
+            "output": data.get("result", ""),
+            "success": data.get("success", True),
+            "error": data.get("error"),
+        }
+
+    def _parse(self, raw: str) -> dict[str, Any]:
+        """Parse genai JSON response."""
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text
+            text = text.rsplit("```", 1)[0].strip()
+        return json.loads(text)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tool Sub-Agent (ReAct Loop)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ToolSubAgent:
+    """
+    ReAct-style tool-use sub-agent.
+    
+    Loop: Think → Act (call tool) → Observe → repeat until answer found.
+    
+    Uses the connector registry to discover available tools at runtime
+    and executes them via registry.execute_tool().
+    """
+    
+    MAX_ITERATIONS = 5
     
     def __init__(
         self,
-        config: SubAgentConfig,
-        mml,
-        parent_context: dict[str, Any],
-        llm_connector=None,
+        query: str,
+        context: str = "",
+        max_iterations: int = 0,
+        timeout_seconds: int = 0,
     ):
-        """
-        Initialize sub-agent.
-        
-        Args:
-            config: Sub-agent configuration.
-            mml: Memory management layer.
-            parent_context: Shared WM context from parent.
-            llm_connector: LLM connector for generation.
-        """
-        self.config = config
-        self.mml = mml
-        self.parent_context = parent_context
-        self.llm = llm_connector
-        self._read_only_mml = ReadOnlyMMLWrapper(mml)
+        self.query = query
+        self.context = context
+        self.max_iterations = max_iterations or self.MAX_ITERATIONS
+        self.timeout = timeout_seconds or config.pipeline.sub_agent_timeout_seconds
+        self._observations: list[dict[str, Any]] = []
     
     async def run(self) -> dict[str, Any]:
         """
-        Execute sub-agent task.
+        Execute the ReAct loop.
         
         Returns:
-            Result dict with output and metadata.
+            Dict with: query, answer, success, iterations, tool_calls, error.
         """
-        audit.log_raw(
-            "sub_agent",
-            "started",
-            f"sub_agent_{self.config.task[:20]}",
-            "started",
-            details={"task": self.config.task},
-        )
-        
-        start_time = datetime.now(timezone.utc)
-        
+        start = time.perf_counter()
         try:
-            # Get memory context if allowed
-            context = []
-            if self.config.memory_access:
-                context = await self._read_only_mml.recall(
-                    self.config.task,
-                    memory_types=["sfm", "lfm", "am"],
-                    top_k=10,
-                )
-            
-            # Execute task with LLM
-            result = await self._execute_with_context(context)
-            
-            elapsed_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-            
-            audit.log_raw(
-                "sub_agent",
-                "completed",
-                f"sub_agent_{self.config.task[:20]}",
-                "completed",
-                duration_ms=elapsed_ms,
-            )
-            
-            return {
-                "success": True,
-                "output": result,
-                "context_used": len(context),
-                "duration_ms": elapsed_ms,
-            }
-        
+            result = await asyncio.wait_for(self._loop(), timeout=self.timeout)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            asyncio.create_task(record_latency("tool_agent", "loop", elapsed_ms))
+            asyncio.create_task(record_count("tool_agent", "success_count" if result.get("success") else "partial_count"))
+            return result
         except asyncio.TimeoutError:
-            audit.log_raw(
-                "sub_agent",
-                "timeout",
-                f"sub_agent_{self.config.task[:20]}",
-                "failed",
-                error="timeout",
-            )
-            
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            asyncio.create_task(record_latency("tool_agent", "loop", elapsed_ms))
+            asyncio.create_task(record_count("tool_agent", "timeout_count"))
             return {
+                "query": self.query,
+                "answer": self._best_partial_answer(),
                 "success": False,
-                "error": "timeout",
-                "output": None,
+                "iterations": len(self._observations),
+                "tool_calls": [o["tool"] for o in self._observations],
+                "error": f"Timed out after {self.timeout}s",
             }
-        
         except Exception as e:
-            audit.log_raw(
-                "sub_agent",
-                "failed",
-                f"sub_agent_{self.config.task[:20]}",
-                "failed",
-                error=str(e),
-            )
-            
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            asyncio.create_task(record_latency("tool_agent", "loop", elapsed_ms))
+            asyncio.create_task(record_count("tool_agent", "error_count"))
+            log.error("ToolSubAgent failed: %s", e, exc_info=True)
             return {
+                "query": self.query,
+                "answer": None,
                 "success": False,
+                "iterations": len(self._observations),
+                "tool_calls": [o["tool"] for o in self._observations],
                 "error": str(e),
-                "output": None,
             }
     
-    async def _execute_with_context(
-        self,
-        context: list[Any],
-    ) -> str:
-        """
-        Execute task with memory context.
+    async def _loop(self) -> dict[str, Any]:
+        """Core ReAct loop."""
+        registry = get_registry()
+        tool_schemas = registry.get_tool_schemas()
         
-        Args:
-            context: Memory context from recall.
+        # Format tool schemas for prompt
+        tools_text = json.dumps(tool_schemas, indent=2)
+        
+        for iteration in range(self.max_iterations):
+            # Build observations context
+            obs_text = json.dumps(self._observations, indent=2) if self._observations else "None yet"
             
-        Returns:
-            LLM output.
-        """
-        if self.llm is None:
-            return f"Sub-agent task: {self.config.task}"
-        
-        # Build prompt with context
-        context_str = "\n".join(str(c) for c in context[:5])
-        
-        prompt = f"""Task: {self.config.task}
-
-Context from memory:
-{context_str}
-
-Parent conversation context:
-{self.parent_context.get('summary', 'No summary available')}
-
-Please complete the task based on the available context."""
-        
-        # Execute with timeout
-        result = await asyncio.wait_for(
-            self.llm.generate(prompt),
-            timeout=self.config.timeout_seconds,
-        )
-        
-        return result
-
-
-class SubAgentSpawner:
-    """
-    Spawns and manages sub-agents.
-    
-    Enforces:
-    - Max concurrent sub-agents
-    - Depth limits
-    - Timeout enforcement
-    """
-    
-    def __init__(
-        self,
-        mml,
-        llm_connector=None,
-        max_concurrent: int = 3,
-    ):
-        """
-        Initialize spawner.
-        
-        Args:
-            mml: Memory management layer.
-            llm_connector: LLM connector.
-            max_concurrent: Max concurrent sub-agents.
-        """
-        self.mml = mml
-        self.llm = llm_connector
-        self.max_concurrent = max_concurrent
-        self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._active_count = 0
-    
-    async def spawn(
-        self,
-        task: str,
-        parent_context: dict[str, Any],
-        config: Optional[SubAgentConfig] = None,
-    ) -> dict[str, Any]:
-        """
-        Spawn a sub-agent.
-        
-        Args:
-            task: Task description.
-            parent_context: Parent conversation context.
-            config: Optional configuration.
+            messages = prompts.get_messages(
+                "response/tool_use.md",
+                tools=tools_text,
+                max_iterations=str(self.max_iterations),
+                query=self.query,
+                context=self.context or "(no additional context)",
+                observations=obs_text,
+            )
             
-        Returns:
-            Sub-agent result.
-        """
-        if config is None:
-            config = SubAgentConfig(task=task)
-        
-        async with self._semaphore:
-            self._active_count += 1
+            raw = await genai.ask({
+                "messages": messages,
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"},
+            })
             
-            try:
-                agent = SubAgent(
-                    config=config,
-                    mml=self.mml,
-                    parent_context=parent_context,
-                    llm_connector=self.llm,
+            step = self._parse_step(raw)
+            
+            # Check if agent returned a final answer
+            if "answer" in step:
+                audit.log_raw(
+                    "agent", "tool_use", "sub_agent", "completed",
+                    details={
+                        "iterations": iteration + 1,
+                        "tools_used": [o["tool"] for o in self._observations],
+                    },
                 )
-                
-                return await agent.run()
+                return {
+                    "query": self.query,
+                    "answer": step["answer"],
+                    "success": not step.get("incomplete", False),
+                    "iterations": iteration + 1,
+                    "tool_calls": [o["tool"] for o in self._observations],
+                    "error": None,
+                }
             
-            finally:
-                self._active_count -= 1
-    
-    async def spawn_parallel(
-        self,
-        tasks: list[str],
-        parent_context: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """
-        Spawn multiple sub-agents in parallel.
+            # Execute the tool action
+            action = step.get("action", {})
+            tool_name = action.get("tool", "")
+            tool_params = action.get("params", {})
+            
+            log.debug(
+                "ToolSubAgent iteration %d: calling %s with %s",
+                iteration + 1, tool_name, tool_params,
+            )
+            
+            start = time.monotonic()
+            try:
+                tool_result = await registry.execute_tool(tool_name, tool_params)
+            except KeyError:
+                tool_result = {"error": f"Unknown tool: {tool_name}"}
+            except Exception as e:
+                tool_result = {"error": f"Tool execution failed: {e}"}
+            elapsed_ms = (time.monotonic() - start) * 1000
+            
+            # Record observation
+            self._observations.append({
+                "iteration": iteration + 1,
+                "thought": step.get("thought", ""),
+                "tool": tool_name,
+                "params": tool_params,
+                "result": tool_result,
+                "duration_ms": round(elapsed_ms, 1),
+            })
+            
+            audit.log_raw(
+                "agent", "tool_call", "sub_agent", "completed",
+                target=tool_name,
+                duration_ms=elapsed_ms,
+                details={"params": tool_params, "success": "error" not in tool_result},
+            )
         
-        Args:
-            tasks: List of task descriptions.
-            parent_context: Parent conversation context.
-            
-        Returns:
-            List of sub-agent results.
-        """
-        coros = [
-            self.spawn(task, parent_context)
-            for task in tasks
+        # Exhausted iterations — ask for final answer with all observations
+        return {
+            "query": self.query,
+            "answer": self._best_partial_answer(),
+            "success": False,
+            "iterations": self.max_iterations,
+            "tool_calls": [o["tool"] for o in self._observations],
+            "error": f"Max iterations ({self.max_iterations}) reached",
+        }
+    
+    def _parse_step(self, raw: str) -> dict[str, Any]:
+        """Parse a single ReAct step from genai response."""
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text
+            text = text.rsplit("```", 1)[0].strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # If parsing fails, treat the raw text as a final answer
+            return {"answer": text, "thought": "Failed to parse JSON, returning raw"}
+    
+    def _best_partial_answer(self) -> Optional[str]:
+        """Extract the best partial answer from observations so far."""
+        if not self._observations:
+            return None
+        # Return the last successful tool result as context
+        for obs in reversed(self._observations):
+            result = obs.get("result", {})
+            if "result" in result:
+                return str(result["result"])
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tool Use Entry Point
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def execute_with_tools(
+    query: str,
+    context: str = "",
+    max_iterations: int = 0,
+    timeout_seconds: int = 0,
+) -> dict[str, Any]:
+    """
+    Execute a query using the tool sub-agent.
+    
+    This is the main entry point for tool-assisted problem solving.
+    Called by the response pipeline when the thinking layer determines
+    tools are needed.
+    
+    Args:
+        query: The user's question or task requiring tools.
+        context: Additional context (memory recall results, conversation).
+        max_iterations: Max ReAct loop iterations (0 = default).
+        timeout_seconds: Timeout (0 = default from config).
+        
+    Returns:
+        Dict with answer, success, iterations, tool_calls.
+    """
+    agent = ToolSubAgent(
+        query=query,
+        context=context,
+        max_iterations=max_iterations,
+        timeout_seconds=timeout_seconds,
+    )
+    return await agent.run()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Executor
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def execute_tasks(
+    tasks: list[dict[str, Any]],
+    parallel: bool = False,
+    context: str = "",
+    user_id: Optional[str] = None,
+    convo_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """
+    Execute a list of tasks via sub-agents.
+
+    Args:
+        tasks: List of TaskSpec-like dicts with task, skill, timeout_seconds.
+        parallel: Whether to run tasks concurrently.
+        context: Shared context for all sub-agents.
+        user_id: User ID for memory access.
+        convo_id: Conversation ID for memory access.
+
+    Returns:
+        List of result dicts.
+    """
+    agents = [
+        SubAgent(
+            task=t.get("task", ""),
+            skill=t.get("skill"),
+            context=context,
+            user_id=user_id,
+            convo_id=convo_id,
+            timeout_seconds=t.get("timeout_seconds", 0),
+        )
+        for t in tasks
+    ]
+
+    if parallel:
+        results = await asyncio.gather(
+            *(agent.run() for agent in agents),
+            return_exceptions=True,
+        )
+        return [
+            r if isinstance(r, dict) else {"task": a.task, "output": None, "success": False, "error": str(r)}
+            for a, r in zip(agents, results)
         ]
-        
-        return await asyncio.gather(*coros, return_exceptions=True)
-    
-    @property
-    def active_count(self) -> int:
-        """Number of active sub-agents."""
-        return self._active_count
+    else:
+        results = []
+        for agent in agents:
+            results.append(await agent.run())
+        return results

@@ -1,17 +1,18 @@
 """
 Decision Making Subsystem
 
-Based on the thought plan and recalled context, decide the execution strategy.
-Determines which skills to execute, whether to spawn sub-agents, etc.
+AI-powered decision engine. Based on the thought plan and recalled context,
+decides whether to answer directly, ask for clarification, or execute tasks.
 """
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
-from collections.abc import Callable, Awaitable
 
-from core import config
-from response.thinking import ThoughtPlan, QueryComplexity
+from connectors import genai
+from prompts import prompts
+from response.thinking import ThoughtPlan
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -21,9 +22,9 @@ from response.thinking import ThoughtPlan, QueryComplexity
 class ExecutionStrategy(Enum):
     """Strategy for executing the query."""
     DIRECT_ANSWER = "direct_answer"      # Answer from memory, no skills
-    SKILL_EXECUTION = "skill_execution"  # Run pre-built skills
-    MULTI_AGENT = "multi_agent"          # Spawn sub-agents for parallel work
-    CODE_GEN = "code_gen"                # Generate code on-the-fly
+    CLARIFY = "clarify"                  # Ask user for clarification
+    EXECUTE = "execute"                  # Run tasks via sub-agents
+    TOOL_USE = "tool_use"                # ReAct loop with tools
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -31,33 +32,16 @@ class ExecutionStrategy(Enum):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
-class SkillCall:
-    """A skill invocation."""
-    skill_name: str
-    parameters: dict[str, Any] = field(default_factory=dict)
-    priority: int = 1  # Lower = higher priority
-    timeout_seconds: int = 30
-    
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "skill_name": self.skill_name,
-            "parameters": self.parameters,
-            "priority": self.priority,
-            "timeout_seconds": self.timeout_seconds,
-        }
-
-
-@dataclass
-class SubAgentSpec:
-    """Specification for a sub-agent."""
+class TaskSpec:
+    """A task for a sub-agent to execute."""
     task: str
-    context: str
+    skill: Optional[str] = None
     timeout_seconds: int = 60
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "task": self.task,
-            "context": self.context,
+            "skill": self.skill,
             "timeout_seconds": self.timeout_seconds,
         }
 
@@ -66,42 +50,58 @@ class SubAgentSpec:
 class ExecutionPlan:
     """
     Plan for executing a query.
-    
-    Produced by DecisionMaker, consumed by Skills and Synthesis.
+
+    Produced by DecisionMaker, consumed by Pipeline.
     """
     strategy: ExecutionStrategy
-    skill_calls: list[SkillCall] = field(default_factory=list)
-    parallel_groups: list[list[SkillCall]] = field(default_factory=list)
-    needs_code_gen: bool = False
-    needs_creativity: bool = False
-    needs_prediction: bool = False
-    sub_agents: list[SubAgentSpec] = field(default_factory=list)
-    model_tier: str = "cheap"  # "expensive" | "cheap"
-    
+    reasoning: str = ""
+    questions: list[str] = field(default_factory=list)  # For CLARIFY
+    tasks: list[TaskSpec] = field(default_factory=list)  # For EXECUTE
+    parallel: bool = False  # Whether tasks can run in parallel
+    model_tier: str = "cheap"  # "cheap" | "default" | "expensive"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "strategy": self.strategy.value,
-            "skill_calls": [s.to_dict() for s in self.skill_calls],
-            "parallel_groups": [[s.to_dict() for s in g] for g in self.parallel_groups],
-            "needs_code_gen": self.needs_code_gen,
-            "needs_creativity": self.needs_creativity,
-            "needs_prediction": self.needs_prediction,
-            "sub_agents": [a.to_dict() for a in self.sub_agents],
+            "reasoning": self.reasoning,
+            "questions": self.questions,
+            "tasks": [t.to_dict() for t in self.tasks],
+            "parallel": self.parallel,
             "model_tier": self.model_tier,
         }
-    
+
     @classmethod
-    def direct_answer(cls) -> "ExecutionPlan":
-        """Create a direct answer plan (no skills)."""
-        return cls(strategy=ExecutionStrategy.DIRECT_ANSWER)
-    
+    def direct_answer(cls, reasoning: str = "Context is sufficient") -> "ExecutionPlan":
+        """Create a direct answer plan."""
+        return cls(strategy=ExecutionStrategy.DIRECT_ANSWER, reasoning=reasoning)
+
     @classmethod
-    def with_skills(cls, skills: list[SkillCall]) -> "ExecutionPlan":
-        """Create a skill execution plan."""
+    def clarify(cls, questions: list[str], reasoning: str = "") -> "ExecutionPlan":
+        """Create a clarification plan."""
         return cls(
-            strategy=ExecutionStrategy.SKILL_EXECUTION,
-            skill_calls=skills,
+            strategy=ExecutionStrategy.CLARIFY,
+            reasoning=reasoning,
+            questions=questions,
         )
+
+    @classmethod
+    def execute(
+        cls, tasks: list["TaskSpec"], parallel: bool = False, model_tier: str = "default",
+        reasoning: str = "",
+    ) -> "ExecutionPlan":
+        """Create an execution plan with tasks."""
+        return cls(
+            strategy=ExecutionStrategy.EXECUTE,
+            reasoning=reasoning,
+            tasks=tasks,
+            parallel=parallel,
+            model_tier=model_tier,
+        )
+    
+    @classmethod
+    def tool_use(cls, reasoning: str = "Query requires external data or computation") -> "ExecutionPlan":
+        """Create a tool-use plan (ReAct loop)."""
+        return cls(strategy=ExecutionStrategy.TOOL_USE, reasoning=reasoning)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -110,149 +110,96 @@ class ExecutionPlan:
 
 class DecisionMaker:
     """
-    Decision making subsystem.
-    
-    Provides:
-    - Execution strategy selection
-    - Skill call planning
-    - Sub-agent spawning decisions
-    - Model tier selection
-    
-    Attributes:
-        llm: LLM callable for complex decisions.
+    AI-powered decision engine.
+
+    Uses genai.ask() to decide whether to answer directly, clarify, or execute.
+    Falls back to direct_answer if genai is unreachable.
     """
-    
-    def __init__(
-        self,
-        llm: Optional[Callable[[str], Awaitable[str]]] = None,
-    ):
-        """
-        Initialize DecisionMaker.
-        
-        Args:
-            llm: LLM callable for complex decisions.
-        """
-        self.llm = llm
-    
+
     async def decide(
         self,
         query: str,
         thought_plan: ThoughtPlan,
-        recall_context: Optional[str] = None,
+        recall_context: str = "",
+        clarification_history: str = "",
     ) -> ExecutionPlan:
         """
         Decide on execution strategy.
-        
+
         Args:
             query: User query.
             thought_plan: Plan from Thinking subsystem.
             recall_context: Context from Memory Recall.
-            
+            clarification_history: Previous clarification Q&A (for multi-round).
+
         Returns:
-            ExecutionPlan for execution.
+            ExecutionPlan with strategy and details.
         """
-        # Simple lookup → direct answer
-        if thought_plan.complexity == QueryComplexity.SIMPLE_LOOKUP:
-            return ExecutionPlan.direct_answer()
-        
-        # Determine strategy based on complexity and needs
-        strategy = self._select_strategy(thought_plan)
-        
-        # Build skill calls
-        skill_calls = self._build_skill_calls(thought_plan)
-        
-        # Determine parallelization
-        parallel_groups = self._identify_parallel_groups(skill_calls)
-        
-        # Determine sub-agents
-        sub_agents = self._plan_sub_agents(thought_plan) if strategy == ExecutionStrategy.MULTI_AGENT else []
-        
-        # Determine model tier
-        model_tier = self._select_model_tier(thought_plan)
-        
-        return ExecutionPlan(
-            strategy=strategy,
-            skill_calls=skill_calls,
-            parallel_groups=parallel_groups,
-            needs_code_gen=strategy == ExecutionStrategy.CODE_GEN,
-            needs_creativity=thought_plan.requires_creativity,
-            needs_prediction=thought_plan.requires_prediction,
-            sub_agents=sub_agents,
-            model_tier=model_tier,
+        messages = prompts.get_messages(
+            "response/decision.md",
+            query=query,
+            understanding=thought_plan.understanding,
+            complexity=thought_plan.complexity.value,
+            steps=", ".join(thought_plan.steps),
+            skills_needed=", ".join(thought_plan.skills_needed) or "none",
+            recall_context=recall_context or "(no context recalled)",
+            clarification_history=clarification_history,
         )
-    
-    def _select_strategy(self, plan: ThoughtPlan) -> ExecutionStrategy:
-        """Select execution strategy based on thought plan."""
-        # Multi-step with parallelizable work → multi-agent
-        if plan.complexity == QueryComplexity.MULTI_STEP and len(plan.parallelizable) > 1:
-            return ExecutionStrategy.MULTI_AGENT
-        
-        # Has skills → skill execution
-        if plan.skills_needed:
-            return ExecutionStrategy.SKILL_EXECUTION
-        
-        # Creative/complex without pre-built skills → code gen
-        if plan.complexity == QueryComplexity.CREATIVE and not plan.skills_needed:
-            return ExecutionStrategy.CODE_GEN
-        
-        # Default to direct answer
-        return ExecutionStrategy.DIRECT_ANSWER
-    
-    def _build_skill_calls(self, plan: ThoughtPlan) -> list[SkillCall]:
-        """Build skill calls from thought plan."""
-        calls = []
-        
-        for i, skill_name in enumerate(plan.skills_needed):
-            calls.append(SkillCall(
-                skill_name=skill_name,
-                parameters={},  # Would be populated based on query analysis
-                priority=i + 1,
-            ))
-        
-        return calls
-    
-    def _identify_parallel_groups(
-        self,
-        skill_calls: list[SkillCall],
-    ) -> list[list[SkillCall]]:
-        """Identify groups of skills that can run in parallel."""
-        if len(skill_calls) <= 1:
-            return []
-        
-        # Simple heuristic: same priority = can parallelize
-        groups: dict[int, list[SkillCall]] = {}
-        for call in skill_calls:
-            if call.priority not in groups:
-                groups[call.priority] = []
-            groups[call.priority].append(call)
-        
-        # Return groups with more than one skill
-        return [g for g in groups.values() if len(g) > 1]
-    
-    def _plan_sub_agents(self, plan: ThoughtPlan) -> list[SubAgentSpec]:
-        """Plan sub-agents for parallel work."""
-        agents = []
-        
-        for group in plan.parallelizable:
-            if len(group) > 0:
-                agents.append(SubAgentSpec(
-                    task=f"Execute: {', '.join(group)}",
-                    context="",
-                ))
-        
-        return agents
-    
-    def _select_model_tier(self, plan: ThoughtPlan) -> str:
-        """Select model tier based on complexity."""
-        # Creative and multi-step need expensive model
-        if plan.complexity in (QueryComplexity.CREATIVE, QueryComplexity.MULTI_STEP):
-            return "expensive"
-        
-        # Analysis might need expensive
-        if plan.complexity == QueryComplexity.ANALYSIS and plan.confidence < 0.7:
-            return "expensive"
-        
-        return "cheap"
+
+        try:
+            raw = await genai.ask({
+                "model": "cheap",
+                "messages": messages,
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"},
+            })
+            return self._parse_response(raw)
+        except Exception:
+            return ExecutionPlan.direct_answer("Fallback — genai unreachable")
+
+    def _parse_response(self, raw: str) -> ExecutionPlan:
+        """Parse genai JSON response into an ExecutionPlan."""
+        try:
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text
+                text = text.rsplit("```", 1)[0].strip()
+
+            data = json.loads(text)
+
+            action = data.get("action", "direct_answer")
+            reasoning = data.get("reasoning", "")
+            model_tier = data.get("model_tier", "cheap")
+
+            if action == "clarify":
+                questions = data.get("questions", [])[:3]
+                if not questions:
+                    return ExecutionPlan.direct_answer("No questions generated")
+                return ExecutionPlan.clarify(questions, reasoning)
+
+            if action == "execute":
+                raw_tasks = data.get("tasks", [])
+                tasks = [
+                    TaskSpec(
+                        task=t.get("task", ""),
+                        skill=t.get("skill"),
+                        timeout_seconds=int(t.get("timeout_seconds", 60)),
+                    )
+                    for t in raw_tasks
+                    if t.get("task")
+                ]
+                if not tasks:
+                    return ExecutionPlan.direct_answer("No tasks generated")
+                parallel = bool(data.get("parallel", False))
+                return ExecutionPlan.execute(tasks, parallel, model_tier, reasoning)
+            
+            if action == "tool_use":
+                return ExecutionPlan.tool_use(reasoning)
+
+            return ExecutionPlan.direct_answer(reasoning)
+
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            return ExecutionPlan.direct_answer("Fallback — parse error")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

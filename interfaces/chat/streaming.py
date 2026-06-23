@@ -63,6 +63,7 @@ class EventStream:
         self._queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._sequence = 0
         self._closed = False
+        self._done_event = asyncio.Event()
     
     def emit(self, type: str, text: str, stage: str = "", **details) -> None:
         """Emit an event to the stream."""
@@ -118,6 +119,11 @@ class EventStream:
         )
         self._queue.put_nowait(event)
         self._closed = True
+        self._done_event.set()
+    
+    async def wait_done(self) -> None:
+        """Block until the stream emits a done event."""
+        await self._done_event.wait()
     
     async def __aiter__(self) -> AsyncIterator[StreamEvent]:
         """Async iterator for consuming events."""

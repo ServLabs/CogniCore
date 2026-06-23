@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from core import config
+from config import config
 
 
 @dataclass

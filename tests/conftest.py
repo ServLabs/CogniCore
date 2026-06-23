@@ -21,5 +21,5 @@ def mock_config(temp_data_dir, monkeypatch):
     monkeypatch.setenv("COGNICORE_DEBUG", "true")
     
     # Re-import config to pick up new env vars
-    from core import config
+    from config import config
     return config

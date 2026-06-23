@@ -11,8 +11,8 @@ from typing import Any, Optional
 
 from fastapi import WebSocket
 
-from core import audit
-from core import log
+from observability import audit
+from logger import log
 from interfaces.chat.streaming import EventStream
 
 
