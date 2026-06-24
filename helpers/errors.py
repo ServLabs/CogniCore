@@ -80,7 +80,7 @@ FALLBACK_CHAINS = {
     "data_query": [
         "retry_query",               # retry with backoff
         "use_cached_data",           # last successful query result
-        "try_alternative_connector", # Snowflake down → try Databricks
+        "try_alternative_connector", # fallback when a data connector fails
         "return_partial_response",   # answer with whatever data we have
         "return_error_to_user",
     ],

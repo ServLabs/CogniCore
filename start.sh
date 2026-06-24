@@ -52,26 +52,7 @@ export AZURE_DEPLOYMENT_CHEAP=""          # e.g. gpt-4o-mini
 # ── OpenAI (Used for embeddings) ────────────────────────────────────────────
 export OPENAI_API_KEY=""                  # Required for text-embedding-3-small
 
-# ── Snowflake (Data connector — leave empty if not using) ────────────────────
-export SNOWFLAKE_ACCOUNT=""               # e.g. xy12345.us-east-1
-export SNOWFLAKE_USER=""
-export SNOWFLAKE_PASSWORD=""
-export SNOWFLAKE_WAREHOUSE=""             # e.g. COMPUTE_WH
-export SNOWFLAKE_DATABASE=""
-export SNOWFLAKE_SCHEMA="PUBLIC"
-export SNOWFLAKE_ROLE=""
-
-# ── Databricks (Data connector — leave empty if not using) ───────────────────
-export DATABRICKS_HOST=""                 # e.g. https://adb-123.azuredatabricks.net
-export DATABRICKS_TOKEN=""
-export DATABRICKS_HTTP_PATH=""            # e.g. /sql/1.0/warehouses/abc123
-export DATABRICKS_CATALOG=""
-export DATABRICKS_SCHEMA=""
-
-# ── Azure SQL (Data connector — leave empty if not using) ────────────────────
-export AZURE_SQL_CONN_STRING=""           # Full ODBC connection string (preferred)
-export AZURE_SQL_SERVER=""                # e.g. your-server.database.windows.net
-export AZURE_SQL_DATABASE=""
+# ── Data connectors are now limited to REST and File sources.
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 3: ENVIRONMENT VARIABLES — PREDEFINED (Tier 2)
@@ -143,7 +124,11 @@ export LOG_LEVEL="INFO"
 #   export LOG_MAX_FILE_SIZE_MB="10"
 #   export LOG_BACKUP_COUNT="5"
 #   export LOG_REDACT_PII="true"
-#   export AZURE_SQL_DRIVER="ODBC Driver 18 for SQL Server"
+#   export LOG_FORMAT="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+#   export LOG_TO_CONSOLE="true"
+#   export LOG_MAX_FILE_SIZE_MB="10"
+#   export LOG_BACKUP_COUNT="5"
+#   export LOG_REDACT_PII="true"
 #
 # ══════════════════════════════════════════════════════════════════════════════
 

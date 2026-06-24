@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 class ConnectorType(Enum):
     """Type of connector."""
-    DATA = "data"        # Snowflake, Databricks, Azure SQL, REST, File
+    DATA = "data"        # REST, File
     AI = "ai"            # LLM, Embedder, NLI, Reranker
     SANDBOX = "sandbox"  # Python, SQL sandboxes
 

@@ -4,7 +4,7 @@ Connectors Layer
 Interface to external systems:
 - AI Tools: LLM (exposed as runtime tool)
 - Internal: GenAI gateway, Embedder, NLI (agent infrastructure)
-- Data Connectors: Snowflake, Databricks, Azure SQL, REST, File
+- Data Connectors: REST, File
 - Sandbox Connectors: Python, SQL sandboxes
 
 All connectors implement BaseConnector for consistent lifecycle management.
@@ -27,9 +27,6 @@ from connectors.registry import (
 from connectors.ai import LLMConnector
 from connectors._internal import genai, EmbeddingConnector, NLIConnector
 from connectors.data import (
-    SnowflakeConnector,
-    DatabricksConnector,
-    AzureSQLConnector,
     RESTAPIConnector,
     FileConnector,
 )
@@ -54,9 +51,6 @@ __all__ = [
     "NLIConnector",
     "genai",
     # Data
-    "SnowflakeConnector",
-    "DatabricksConnector",
-    "AzureSQLConnector",
     "RESTAPIConnector",
     "FileConnector",
     # Sandbox

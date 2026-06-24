@@ -131,7 +131,7 @@ CogniCore implements a cognitive architecture inspired by human memory systems:
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                         Connectors                                   │   │
-│  │   LLM │ Embeddings │ NLI │ Snowflake │ Databricks │ Sandbox         │   │
+│  │   LLM │ Embeddings │ NLI │ REST/File │ Sandbox         │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

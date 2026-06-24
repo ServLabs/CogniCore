@@ -179,15 +179,7 @@ class ConnectorRegistry:
         self.register("sql_sandbox", SQLSandbox())
         
         # ── Optional data connectors (register only if configured) ──
-        from connectors.data import SnowflakeConnector, DatabricksConnector, AzureSQLConnector
-        
-        if config.snowflake.account:
-            self.register("snowflake", SnowflakeConnector())
-        if config.databricks.host:
-            self.register("databricks", DatabricksConnector())
-        if config.azure_sql.server or config.azure_sql.connection_string:
-            self.register("azure_sql", AzureSQLConnector())
-        
+        # Currently only REST and File connectors are supported.
         # ── Connect and health-check ──
         connect_results = await self.connect_all()
         health_results = await self.health_check_all()

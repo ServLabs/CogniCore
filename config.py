@@ -434,37 +434,6 @@ class NLIConfig:
 
 
 @dataclass
-class SnowflakeConfig:
-    """Snowflake connection settings."""
-    account: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_ACCOUNT"))
-    user: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_USER"))
-    password: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_PASSWORD"))
-    warehouse: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_WAREHOUSE"))
-    database: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_DATABASE"))
-    schema: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_SCHEMA", "PUBLIC"))
-    role: Optional[str] = field(default_factory=lambda: os.getenv("SNOWFLAKE_ROLE"))
-
-
-@dataclass
-class DatabricksConfig:
-    """Databricks connection settings."""
-    host: Optional[str] = field(default_factory=lambda: os.getenv("DATABRICKS_HOST"))
-    token: Optional[str] = field(default_factory=lambda: os.getenv("DATABRICKS_TOKEN"))
-    http_path: Optional[str] = field(default_factory=lambda: os.getenv("DATABRICKS_HTTP_PATH"))
-    catalog: Optional[str] = field(default_factory=lambda: os.getenv("DATABRICKS_CATALOG"))
-    schema: Optional[str] = field(default_factory=lambda: os.getenv("DATABRICKS_SCHEMA"))
-
-
-@dataclass
-class AzureSQLConfig:
-    """Azure SQL connection settings."""
-    connection_string: Optional[str] = field(default_factory=lambda: os.getenv("AZURE_SQL_CONN_STRING"))
-    server: Optional[str] = field(default_factory=lambda: os.getenv("AZURE_SQL_SERVER"))
-    database: Optional[str] = field(default_factory=lambda: os.getenv("AZURE_SQL_DATABASE"))
-    driver: str = field(default_factory=lambda: os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server"))
-
-
-@dataclass
 class APIConfig:
     """API server settings."""
     # WebSocket server
@@ -610,11 +579,6 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
-    
-    # External data source connectors
-    snowflake: SnowflakeConfig = field(default_factory=SnowflakeConfig)
-    databricks: DatabricksConfig = field(default_factory=DatabricksConfig)
-    azure_sql: AzureSQLConfig = field(default_factory=AzureSQLConfig)
     
     # Environment
     env: str = field(default_factory=lambda: os.getenv("COGNICORE_ENV", "development"))
